@@ -18,9 +18,9 @@ A JavaScript build system that converts source text files into HTML, PDF, and Ma
 
 ```bash
 npm install
-node build.js           # Watch mode - rebuilds on file changes
-node build.js --push    # Build and push to GitHub
-node build.js --no-watch # Single build, then exit
+node scripts/builder.js           # Watch mode - rebuilds on file changes
+node scripts/builder.js --push    # Build and push to GitHub
+node scripts/builder.js --no-watch # Single build, then exit
 ```
 
 **What it does:**
