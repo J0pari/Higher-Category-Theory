@@ -1534,6 +1534,20 @@ class LazyGit {
             return this.statusCache.get('current');
         });
     }
+
+    // Get current commit hash for hermetic builds
+    getCurrentCommit() {
+        return new PullPromise(async () => {
+            try {
+                const hash = execSync('git rev-parse HEAD', {
+                    encoding: CONFIG.strings.standardEncoding
+                }).trim();
+                return hash;
+            } catch (e) {
+                return 'unknown';
+            }
+        });
+    }
     
     // Get diff lazily
     diff(ref = 'HEAD') {
@@ -5865,17 +5879,29 @@ class ProcessingCoordinator {
         
         // Absorb file content
         this.absorb(fileContent, 'file-content');
-        
-        // Absorb file metadata  
+
+        // Absorb file metadata
         this.absorb(fileName, 'file-name');
         this.absorb(buildContext.timestamp?.toString() || Date.now().toString(), 'timestamp');
         this.absorb(buildContext.version || '1.0.0', 'version');
-        
+
+        // Absorb git commit for hermetic builds
+        if (buildContext.gitCommit) {
+            this.absorb(buildContext.gitCommit, 'git-commit');
+        }
+
+        // Absorb dependencies for hermetic builds
+        if (buildContext.dependencies) {
+            buildContext.dependencies.forEach(dep => {
+                this.absorb(dep.hash, `dep-${dep.name}`);
+            });
+        }
+
         // Absorb build configuration
         if (buildContext.formats) {
             buildContext.formats.forEach(fmt => this.absorb(fmt, `format-${fmt}`));
         }
-        
+
         // Domain-separated hash for builds
         return this.contentHash('build');
     }
@@ -9500,18 +9526,31 @@ function generateIndex(documents) {
 
 async function buildFile(docConfig) {
     console.log('[BUILD] Starting build for:', docConfig.txt);
-    
+
     // Read file content
     const fileContent = await lazyFS.pull(lazyFS.read(path.join(PROJECT_ROOT, docConfig.txt)));
-    
+
+    // Get current git commit for hermetic builds
+    const gitCommit = await lazyGit.getCurrentCommit().pull().catch(() => 'unknown');
+
+    // Build dependencies (builder script hash)
+    const builderHash = await lazyFS.pull(
+        lazyFS.read(path.join(PROJECT_ROOT, 'scripts/builder.js'))
+    ).then(content => {
+        const hash = crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
+        return { name: 'builder', hash };
+    }).catch(() => ({ name: 'builder', hash: 'unknown' }));
+
     // Build context for proper sponge absorption
     const buildContext = {
         timestamp: Date.now(),
         version: CONFIG.version || '1.0.0',
         formats: ['html', 'pdf', 'md'],
-        environment: process.env.NODE_ENV || 'production'
+        environment: process.env.NODE_ENV || 'production',
+        gitCommit,
+        dependencies: [builderHash]
     };
-    
+
     // Use build-aware sponge with full context
     const buildHash = processingCoordinator.buildSponge(
         fileContent,
