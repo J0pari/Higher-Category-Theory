@@ -2609,7 +2609,7 @@ document.addEventListener('DOMContentLoaded', function() {
         </h3>
             <p>A <strong>simplicial set</strong> is a functor:</p>
 <p><div class="math-block">X: Δ<sup>op</sup> → <span class="text-in-math">Set</span></div></p>
-<p>Here, <span class="math-inline">Δ</span> is the <strong>simplex category</strong>, whose objects are finite nonempty linearly ordered sets [n] = \{0 < 1 < ... < n\}, and whose morphisms are order-preserving maps. The opposite category <span class="math-inline">Δ<sup>op</sup></span> reverses the direction of these morphisms.</p>
+<p>Here, <span class="math-inline">Δ</span> is the <strong>simplex category</strong>, whose objects are finite nonempty linearly ordered sets [n] = {0 < 1 < ... < n}, and whose morphisms are order-preserving maps. The opposite category <span class="math-inline">Δ<sup>op</sup></span> reverses the direction of these morphisms.</p>
 <p>This means that a simplicial set assigns:</p>
 <ul>
 <li>To each [n], a set <span class="math-inline">X<sub>n</sub></span> of <strong>n-simplices</strong>,</li>
@@ -4172,7 +4172,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <p>Given a geometric morphism  f: <span class="math-inline"><span class="mathcal">X</span></span> <span class="math-inline">→</span> <span class="math-inline"><span class="mathcal">Y</span></span>  and a morphism  g: <span class="math-inline"><span class="mathcal">Z</span></span> <span class="math-inline">→</span> <span class="math-inline"><span class="mathcal">Y</span></span> , one can form the <strong>pullback</strong> ∞-topos  </p>
 <p><div class="math-block"><span class="mathcal">X</span> ×<sub><span class="mathcal">Y</span></sub> <span class="mathcal">Z</span>,</div>  </p>
 <p>and obtain a <strong>base change square</strong>:</p>
-<p><div class="math-block"><table class="array-math"><tbody><tr><td class="array-cell"><span class="mathcal">X</span> ×<sub><span class="mathcal">Y</span></sub> <span class="mathcal">Z</span></td><td class="array-cell"><span class="arrow-with-text">→<span class="arrow-text">f'</span></span></td><td class="array-cell"><span class="mathcal">Z</span></td></tr><tr><td class="array-cell">↓</td><td class="array-cell"></td><td class="array-cell">↓ g</td></tr><tr><td class="array-cell"><span class="mathcal">X</span></td><td class="array-cell"><span class="arrow-with-text">→<span class="arrow-text">f</span></span></td><td class="array-cell"><span class="mathcal">Y</span></td></tr></tbody></table></div></p>
+<p><div class="math-block"><table class="array-math"><tbody><tr><td class="array-cell"><span class="mathcal">X</span> ×<sub><span class="mathcal">Y</span></sub> <span class="mathcal">Z</span></td><td class="array-cell"><span class="arrow-with-text">→<span class="arrow-text">f'</span></span></td><td class="array-cell"><span class="mathcal">Z</span> <br>↓</td><td class="array-cell"></td><td class="array-cell">↓ g <br><span class="mathcal">X</span></td><td class="array-cell"><span class="arrow-with-text">→<span class="arrow-text">f</span></span></td><td class="array-cell"><span class="mathcal">Y</span></td></tr></tbody></table></div></p>
 <p>This square expresses how sheaves and structure <strong>transport coherently</strong> across fibered diagrams. The base change formula ensures that <strong>pulling back then pushing forward</strong> is equivalent to <strong>pushing forward then pulling back</strong>—a fundamental principle in cohomology and descent.</p>
 <hr>
         </section>
@@ -4236,7 +4236,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <a href="#sec-132-classical-background" class="anchor-link" onclick="navigateToSection('sec-132-classical-background', event)">#</a>
             **Classical Background**
         </h3>
-            <p>In classical sheaf theory, descent refers to the ability to <strong>glue local sections</strong> over a cover to obtain a global section. A presheaf  F  on a topological space satisfies descent if, for every open cover  \{<span class="math-inline">U<sub>i</sub></span>\} , the diagram  </p>
+            <p>In classical sheaf theory, descent refers to the ability to <strong>glue local sections</strong> over a cover to obtain a global section. A presheaf  F  on a topological space satisfies descent if, for every open cover  {<span class="math-inline">U<sub>i</sub></span>} , the diagram  </p>
 <p><div class="math-block">F(U) → ∏<sub>i</sub> F(U<sub>i</sub>) ⇉ ∏<sub>i,j</sub> F(U<sub>i</sub> ∩ U<sub>j</sub>)</div>  </p>
 <p>is an equalizer.</p>
 <p>In higher category theory, this condition is <strong>too rigid</strong>. Instead, one replaces equalizers with <strong>homotopy limits</strong>, and covers with <strong>hypercovers</strong>—simplicial objects that encode <strong>higher-order intersections and refinements</strong>.</p>

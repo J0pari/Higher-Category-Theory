@@ -314,29 +314,29 @@
 
 
 
-ONE. Section 1: Spaces, Morphisms, and Cofinality
+1. Section 1: Spaces, Morphisms, and Cofinality
 
-ONE. Section 2: Fibrations and Transport
+1. Section 2: Fibrations and Transport
 
-ONE. Section 3: Straightening and Unstraightening
+1. Section 3: Straightening and Unstraightening
 
-ONE. Section 4: Limits and Colimits
+1. Section 4: Limits and Colimits
 
-ONE. Section 5: Extensions and Adjunctions
+1. Section 5: Extensions and Adjunctions
 
-ONE. Section 6: Algebraic Patterns
+1. Section 6: Algebraic Patterns
 
-ONE. Section 7: Presentability
+1. Section 7: Presentability
 
-ONE. Section 8: ∞-Topoi and Geometric Morphisms
+1. Section 8: ∞-Topoi and Geometric Morphisms
 
-ONE. Section 9: Modalities and Cohesion
+1. Section 9: Modalities and Cohesion
 
-ONE. Section 10: Descent and Stacks
+1. Section 10: Descent and Stacks
 
-ONE. Section 11: Stability
+1. Section 11: Stability
 
-ONE. Section 12: Higher Topoi
+1. Section 12: Higher Topoi
 
 
 
@@ -558,13 +558,13 @@ A simplicial set X satisfies the **Kan condition** if every horn has a filler: f
 
 **Proposition**: For a quasi-category X:
 
-ONE. X_0 forms the objects
+1. X_0 forms the objects
 
-ONE. X_1 forms the morphisms  
+1. X_1 forms the morphisms  
 
-ONE. For f,g ∈ X_1 with d_0(f) = d_1(g), composition g∘f is defined by any 2-simplex σ with d_2(σ) = f, d_0(σ) = g
+1. For f,g ∈ X_1 with d_0(f) = d_1(g), composition g∘f is defined by any 2-simplex σ with d_2(σ) = f, d_0(σ) = g
 
-ONE. Composition is associative and unital up to homotopy
+1. Composition is associative and unital up to homotopy
 
 
 
@@ -632,13 +632,13 @@ The brain's pattern completion explores the space of possible punchlines. Succes
 
 The cognitive process might involve stages that echo the mathematical structure:
 
-ONE. Pattern recognition (identifying what's given—the "horn")
+1. Pattern recognition (identifying what's given—the "horn")
 
-ONE. Expectation generation (exploring possible completions)  
+1. Expectation generation (exploring possible completions)  
 
-ONE. Resolution selection (choosing a particular filler)
+1. Resolution selection (choosing a particular filler)
 
-ONE. Surprise response (when the chosen filler differs from the expected one)
+1. Surprise response (when the chosen filler differs from the expected one)
 
 
 
@@ -848,11 +848,11 @@ there exists a dashed arrow Δ^n → E making both triangles commute.
 
 **Theorem 2.1.2.2 (HTT)**: If B is a quasi-category, then:
 
-ONE. For any left fibration p: E → B, each fiber E_b is a Kan complex
+1. For any left fibration p: E → B, each fiber E_b is a Kan complex
 
-ONE. The induced map on homotopy categories h(E) → h(B) is a left fibration of ordinary categories
+1. The induced map on homotopy categories h(E) → h(B) is a left fibration of ordinary categories
 
-ONE. There is an equivalence of ∞-categories:
+1. There is an equivalence of ∞-categories:
 
 
 
@@ -936,11 +936,11 @@ The left lifting property captures melodic coherence: when harmony shifts betwee
 
 This framework illuminates jazz improvisation patterns:
 
-ONE. Note choices constrained by harmonic context (fibration structure)
+1. Note choices constrained by harmonic context (fibration structure)
 
-ONE. Multiple equivalent paths between musical ideas (homotopy)
+1. Multiple equivalent paths between musical ideas (homotopy)
 
-ONE. Master improvisers navigating longer coherent structures (higher simplices)
+1. Master improvisers navigating longer coherent structures (higher simplices)
 
 
 
@@ -1096,11 +1096,11 @@ The inner lifting property ensures **modular composability**: given compatible i
 
 **Empirical Prediction**: In large codebases:
 
-ONE. Successful architectures exhibit clear fibration structure
+1. Successful architectures exhibit clear fibration structure
 
-ONE. Technical debt accumulates where fibration structure breaks
+1. Technical debt accumulates where fibration structure breaks
 
-ONE. Refactoring restores fibration structure
+1. Refactoring restores fibration structure
 
 
 
@@ -1510,11 +1510,11 @@ Experienced divers develop robust correspondence techniques through practice. Th
 
 The equivalence Un ∘ St ≃ id and St ∘ Un ≃ id means:
 
-ONE. Every geometric structure has an algebraic description
+1. Every geometric structure has an algebraic description
 
-ONE. Every algebraic pattern has a geometric realization
+1. Every algebraic pattern has a geometric realization
 
-ONE. We can freely translate between perspectives
+1. We can freely translate between perspectives
 
 
 
@@ -2496,13 +2496,13 @@ Map_D(F(c), d) ≃ Map_C(c, G(d))
 
 **Theorem**: For presentable ∞-categories, the following are equivalent:
 
-ONE. F ⊣ G
+1. F ⊣ G
 
-ONE. F preserves colimits
+1. F preserves colimits
 
-ONE. G preserves limits
+1. G preserves limits
 
-ONE. The unit and counit satisfy triangle identities
+1. The unit and counit satisfy triangle identities
 
 
 
@@ -3896,11 +3896,11 @@ Integration with monitoring services adds accessibility requirements: the system
 
 **Definition (HTT 6.1.0.1)**: An ∞-category X is an **∞-topos** if:
 
-ONE. X is presentable
+1. X is presentable
 
-ONE. Colimits in X are universal (preserved by pullback)
+1. Colimits in X are universal (preserved by pullback)
 
-ONE. X is generated under colimits by a small subcategory of objects with κ-compact diagonal
+1. X is generated under colimits by a small subcategory of objects with κ-compact diagonal
 
 
 
@@ -4874,11 +4874,11 @@ Different stylists have different capacities: seniors handle more ○, juniors t
 
 **Definition**: Let p: E → B be a Cartesian fibration and {U_i → X} a covering family. **Descent data** consists of:
 
-ONE. Objects x_i ∈ E_{U_i} for each i
+1. Objects x_i ∈ E_{U_i} for each i
 
-ONE. Isomorphisms φ_{ij}: x_i|_{U_i ×_X U_j} → x_j|_{U_i ×_X U_j}
+1. Isomorphisms φ_{ij}: x_i|_{U_i ×_X U_j} → x_j|_{U_i ×_X U_j}
 
-ONE. Cocycle condition: φ_{jk} ∘ φ_{ij} = φ_{ik} on triple overlaps
+1. Cocycle condition: φ_{jk} ∘ φ_{ij} = φ_{ik} on triple overlaps
 
 
 
@@ -5448,11 +5448,11 @@ Special programs create complex descent: gifted, special education, and English 
 
 An ∞-category C is **stable** if:
 
-ONE. C has a zero object (initial and terminal)
+1. C has a zero object (initial and terminal)
 
-ONE. Every morphism has a fiber and cofiber
+1. Every morphism has a fiber and cofiber
 
-ONE. A triangle is a fiber sequence if and only if it is a cofiber sequence
+1. A triangle is a fiber sequence if and only if it is a cofiber sequence
 
 
 

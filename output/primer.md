@@ -270,59 +270,59 @@
 
 
 
-ONE. Layer 1: Simplicial Sets — The Combinatorial Language of Homotopy
+1. Layer 1: Simplicial Sets — The Combinatorial Language of Homotopy
 
-ONE. Layer 2: Left Fibrations
+1. Layer 2: Left Fibrations
 
-ONE. Layer 3: Inner Fibrations
+1. Layer 3: Inner Fibrations
 
-ONE. Layer 4: Cartesian Fibrations
+1. Layer 4: Cartesian Fibrations
 
-ONE. Layer 5: Straightening and Unstraightening
+1. Layer 5: Straightening and Unstraightening
 
-ONE. Layer 6: Limits and Colimits in ∞-Categories
+1. Layer 6: Limits and Colimits in ∞-Categories
 
-ONE. Layer 7: Kan Extensions
+1. Layer 7: Kan Extensions
 
-ONE. Layer 8: Adjunctions in ∞-Categories
+1. Layer 8: Adjunctions in ∞-Categories
 
-ONE. Layer 9: Monads and Comonads in ∞-Categories
+1. Layer 9: Monads and Comonads in ∞-Categories
 
-ONE. Layer 10: Presentable and Accessible ∞-Categories
+1. Layer 10: Presentable and Accessible ∞-Categories
 
-ONE. Layer 11: Stable ∞-Categories
+1. Layer 11: Stable ∞-Categories
 
-ONE. Layer 12: Monoidal ∞-Categories
+1. Layer 12: Monoidal ∞-Categories
 
-ONE. Layer 13: ∞-Topoi
+1. Layer 13: ∞-Topoi
 
-ONE. Layer 14: Geometric Morphisms and Base Change
+1. Layer 14: Geometric Morphisms and Base Change
 
-ONE. Layer 15: Descent and Hypercovers
+1. Layer 15: Descent and Hypercovers
 
-ONE. Layer 16: ∞-Categorical Giraud Axioms
+1. Layer 16: ∞-Categorical Giraud Axioms
 
-ONE. Layer 17: Geometric Morphisms and Logical Structure
+1. Layer 17: Geometric Morphisms and Logical Structure
 
-ONE. Layer 18: Modalities and Subtopoi
+1. Layer 18: Modalities and Subtopoi
 
-ONE. Layer 19: Internal Language and Type-Theoretic Semantics
+1. Layer 19: Internal Language and Type-Theoretic Semantics
 
-ONE. Layer 20: Higher Sheaf Conditions and Stack Semantics
+1. Layer 20: Higher Sheaf Conditions and Stack Semantics
 
-ONE. Layer 21: Shape Theory and Spatial Realization
+1. Layer 21: Shape Theory and Spatial Realization
 
-ONE. Layer 22: Classifying ∞-Topoi and Universal Properties
+1. Layer 22: Classifying ∞-Topoi and Universal Properties
 
-ONE. Layer 23: Structured ∞-Categorical Universes and Logical Topoi
+1. Layer 23: Structured ∞-Categorical Universes and Logical Topoi
 
-ONE. Layer 24: The ∞-Category of ∞-Topoi
+1. Layer 24: The ∞-Category of ∞-Topoi
 
-ONE. Layer 25: Cohesive ∞-Topoi
+1. Layer 25: Cohesive ∞-Topoi
 
-ONE. Layer 26: (∞,2)-Categories
+1. Layer 26: (∞,2)-Categories
 
-ONE. Layer 27: (∞,2)-Topoi and Higher Categorical Logic
+1. Layer 27: (∞,2)-Topoi and Higher Categorical Logic
 
 
 
@@ -372,7 +372,7 @@ A **simplicial set** is a functor:
 
 <<<BLOCKMATH>>>X: \Delta^{op} \to \text{Set}<<</BLOCKMATH>>>
 
-Here, <<<INLINEMATH>>>\Delta<<</INLINEMATH>>> is the **simplex category**, whose objects are finite nonempty linearly ordered sets <<<INLINEMATH>>>[n] = \{0 < 1 < ... < n\}<<</INLINEMATH>>>, and whose morphisms are order-preserving maps. The opposite category <<<INLINEMATH>>>\Delta^{op}<<</INLINEMATH>>> reverses the direction of these morphisms.
+Here, <<<INLINEMATH>>>\Delta<<</INLINEMATH>>> is the **simplex category**, whose objects are finite nonempty linearly ordered sets <<<INLINEMATH>>>[n] = {0 < 1 < ... < n}<<</INLINEMATH>>>, and whose morphisms are order-preserving maps. The opposite category <<<INLINEMATH>>>\Delta^{op}<<</INLINEMATH>>> reverses the direction of these morphisms.
 
 
 
@@ -665,8 +665,8 @@ Rather than describing such functors directly, we encode them **geometrically** 
 satisfying a lifting condition: for every **left horn** <<<INLINEMATH>>> \Lambda^n_0 \hookrightarrow \Delta^n <<</INLINEMATH>>>, and every commutative diagram:
 
 <<<BLOCKMATH>>>\begin{aligned}
-\Lambda^n_0 &\longrightarrow X \\
-\downarrow &\quad \downarrow p \\
+\Lambda^n_0 &\longrightarrow X \newline 
+\downarrow &\quad \downarrow p \newline 
 \Delta^n &\longrightarrow S
 \end{aligned}<<</BLOCKMATH>>>
 
@@ -783,8 +783,8 @@ This is the natural next step in the Postnikov tower: having built the language 
 Let <<<INLINEMATH>>> p: X \to S <<</INLINEMATH>>> be a map of simplicial sets. We say that <<<INLINEMATH>>> p <<</INLINEMATH>>> is an **inner fibration** if for every **inner horn** <<<INLINEMATH>>> \Lambda^n_k \hookrightarrow \Delta^n <<</INLINEMATH>>> with <<<INLINEMATH>>> 0 < k < n <<</INLINEMATH>>>, and every commutative diagram:
 
 <<<BLOCKMATH>>>\begin{aligned}
-\Lambda^n_k &\longrightarrow X \\
-\downarrow &\quad \downarrow p \\
+\Lambda^n_k &\longrightarrow X \newline 
+\downarrow &\quad \downarrow p \newline 
 \Delta^n &\longrightarrow S
 \end{aligned}<<</BLOCKMATH>>>
 
@@ -900,9 +900,9 @@ Let <<<INLINEMATH>>> p: X \to S <<</INLINEMATH>>> be a map of simplicial sets. T
 
 
 
-ONE. <<<INLINEMATH>>> p <<</INLINEMATH>>> is an **inner fibration**—i.e., it satisfies the lifting condition for all inner horns <<<INLINEMATH>>> \Lambda^n_k \hookrightarrow \Delta^n <<</INLINEMATH>>> with <<<INLINEMATH>>> 0 < k < n <<</INLINEMATH>>>,
+1. <<<INLINEMATH>>> p <<</INLINEMATH>>> is an **inner fibration**—i.e., it satisfies the lifting condition for all inner horns <<<INLINEMATH>>> \Lambda^n_k \hookrightarrow \Delta^n <<</INLINEMATH>>> with <<<INLINEMATH>>> 0 < k < n <<</INLINEMATH>>>,
 
-ONE. For every edge <<<INLINEMATH>>> f: s \to t <<</INLINEMATH>>> in <<<INLINEMATH>>> S <<</INLINEMATH>>> and every vertex <<<INLINEMATH>>> y \in X <<</INLINEMATH>>> lying over <<<INLINEMATH>>> t <<</INLINEMATH>>>, there exists a **Cartesian edge** <<<INLINEMATH>>> \tilde{f}: x \to y <<</INLINEMATH>>> in <<<INLINEMATH>>> X <<</INLINEMATH>>> lying over <<<INLINEMATH>>> f <<</INLINEMATH>>> with the following universal property: for any edge <<<INLINEMATH>>> h: w \to y <<</INLINEMATH>>> in <<<INLINEMATH>>> X <<</INLINEMATH>>> and any factorization <<<INLINEMATH>>> p(h) = f \circ g <<</INLINEMATH>>> in <<<INLINEMATH>>> S <<</INLINEMATH>>>, there exists a unique edge <<<INLINEMATH>>> h': w \to x <<</INLINEMATH>>> in <<<INLINEMATH>>> X <<</INLINEMATH>>> such that <<<INLINEMATH>>> p(h') = g <<</INLINEMATH>>> and <<<INLINEMATH>>> h = \tilde{f} \circ h' <<</INLINEMATH>>>.
+1. For every edge <<<INLINEMATH>>> f: s \to t <<</INLINEMATH>>> in <<<INLINEMATH>>> S <<</INLINEMATH>>> and every vertex <<<INLINEMATH>>> y \in X <<</INLINEMATH>>> lying over <<<INLINEMATH>>> t <<</INLINEMATH>>>, there exists a **Cartesian edge** <<<INLINEMATH>>> \tilde{f}: x \to y <<</INLINEMATH>>> in <<<INLINEMATH>>> X <<</INLINEMATH>>> lying over <<<INLINEMATH>>> f <<</INLINEMATH>>> with the following universal property: for any edge <<<INLINEMATH>>> h: w \to y <<</INLINEMATH>>> in <<<INLINEMATH>>> X <<</INLINEMATH>>> and any factorization <<<INLINEMATH>>> p(h) = f \circ g <<</INLINEMATH>>> in <<<INLINEMATH>>> S <<</INLINEMATH>>>, there exists a unique edge <<<INLINEMATH>>> h': w \to x <<</INLINEMATH>>> in <<<INLINEMATH>>> X <<</INLINEMATH>>> such that <<<INLINEMATH>>> p(h') = g <<</INLINEMATH>>> and <<<INLINEMATH>>> h = \tilde{f} \circ h' <<</INLINEMATH>>>.
 
 
 
@@ -2090,11 +2090,11 @@ An ∞-category <<<INLINEMATH>>> \mathcal{C} <<</INLINEMATH>>> is **stable** if:
 
 
 
-ONE. **Has zero object**: There exists an object that is both initial and terminal
+1. **Has zero object**: There exists an object that is both initial and terminal
 
-ONE. **Has finite limits and colimits**: Pullbacks and pushouts exist
+1. **Has finite limits and colimits**: Pullbacks and pushouts exist
 
-ONE. **Pullback squares are pushout squares**: A square is a pullback if and only if it is a pushout
+1. **Pullback squares are pushout squares**: A square is a pullback if and only if it is a pushout
 
 
 
@@ -2396,15 +2396,15 @@ A **monoidal ∞-category** is an ∞-category <<<INLINEMATH>>> \mathcal{C} <<</
 
 
 
-ONE. A tensor product functor <<<INLINEMATH>>> ⊗: \mathcal{C} \times \mathcal{C} \to \mathcal{C} <<</INLINEMATH>>>
+1. A tensor product functor <<<INLINEMATH>>> ⊗: \mathcal{C} \times \mathcal{C} \to \mathcal{C} <<</INLINEMATH>>>
 
-ONE. A unit object <<<INLINEMATH>>> \mathbb{1} \in \mathcal{C} <<</INLINEMATH>>>
+1. A unit object <<<INLINEMATH>>> \mathbb{1} \in \mathcal{C} <<</INLINEMATH>>>
 
-ONE. Coherent associativity: <<<INLINEMATH>>> (A ⊗ B) ⊗ C \simeq A ⊗ (B ⊗ C) <<</INLINEMATH>>>
+1. Coherent associativity: <<<INLINEMATH>>> (A ⊗ B) ⊗ C \simeq A ⊗ (B ⊗ C) <<</INLINEMATH>>>
 
-ONE. Coherent unitality: <<<INLINEMATH>>> \mathbb{1} ⊗ A \simeq A \simeq A ⊗ \mathbb{1} <<</INLINEMATH>>>
+1. Coherent unitality: <<<INLINEMATH>>> \mathbb{1} ⊗ A \simeq A \simeq A ⊗ \mathbb{1} <<</INLINEMATH>>>
 
-ONE. Higher coherences satisfying all relations
+1. Higher coherences satisfying all relations
 
 
 
@@ -2690,15 +2690,15 @@ An ∞-category <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> is an **∞-topos
 
 
 
-ONE. **Presentability**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> is presentable.
+1. **Presentability**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> is presentable.
 
-ONE. **Finite Limits**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> admits all finite limits.
+1. **Finite Limits**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> admits all finite limits.
 
-ONE. **Colimits are Universal**: Colimits commute with pullbacks.
+1. **Colimits are Universal**: Colimits commute with pullbacks.
 
-ONE. **Local Cartesian Closure**: For every object <<<INLINEMATH>>> X \in \mathcal{X} <<</INLINEMATH>>>, the slice category <<<INLINEMATH>>> \mathcal{X}_{/X} <<</INLINEMATH>>> is Cartesian closed.
+1. **Local Cartesian Closure**: For every object <<<INLINEMATH>>> X \in \mathcal{X} <<</INLINEMATH>>>, the slice category <<<INLINEMATH>>> \mathcal{X}_{/X} <<</INLINEMATH>>> is Cartesian closed.
 
-ONE. **Descent**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> satisfies effective epimorphic descent for hypercovers.
+1. **Descent**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> satisfies effective epimorphic descent for hypercovers.
 
 
 
@@ -2963,8 +2963,8 @@ and obtain a **base change square**:
 
 
 <<<BLOCKMATH>>>\begin{array}{ccc}
-\mathcal{X} \times_{\mathcal{Y}} \mathcal{Z} & \xrightarrow{f'} & \mathcal{Z} \\
-\downarrow & & \downarrow g \\
+\mathcal{X} \times_{\mathcal{Y}} \mathcal{Z} & \xrightarrow{f'} & \mathcal{Z} \newline 
+\downarrow & & \downarrow g \newline 
 \mathcal{X} & \xrightarrow{f} & \mathcal{Y}
 \end{array}<<</BLOCKMATH>>>
 
@@ -3068,7 +3068,7 @@ In the tower of Higher Topos Theory, this layer builds on ∞-topoi (Layer 12) a
 
 
 
-In classical sheaf theory, descent refers to the ability to **glue local sections** over a cover to obtain a global section. A presheaf <<<INLINEMATH>>> F <<</INLINEMATH>>> on a topological space satisfies descent if, for every open cover <<<INLINEMATH>>> \{U_i\} <<</INLINEMATH>>>, the diagram  
+In classical sheaf theory, descent refers to the ability to **glue local sections** over a cover to obtain a global section. A presheaf <<<INLINEMATH>>> F <<</INLINEMATH>>> on a topological space satisfies descent if, for every open cover <<<INLINEMATH>>> {U_i} <<</INLINEMATH>>>, the diagram  
 
 <<<BLOCKMATH>>>F(U) \to \prod_i F(U_i) \rightrightarrows \prod_{i,j} F(U_i \cap U_j)<<</BLOCKMATH>>>  
 
@@ -3248,13 +3248,13 @@ In classical category theory, **Giraud’s axioms** characterize Grothendieck to
 
 
 
-ONE. **Presentability**: The category is cocomplete and generated under colimits by a small set of objects.
+1. **Presentability**: The category is cocomplete and generated under colimits by a small set of objects.
 
-ONE. **Colimits commute with pullbacks**.
+1. **Colimits commute with pullbacks**.
 
-ONE. **Effective epimorphisms are stable under pullback**.
+1. **Effective epimorphisms are stable under pullback**.
 
-ONE. **Every equivalence relation has a quotient**.
+1. **Every equivalence relation has a quotient**.
 
 
 
@@ -3274,13 +3274,13 @@ Let <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> be a presentable ∞-category
 
 
 
-ONE. **Presentability**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> is presentable.
+1. **Presentability**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> is presentable.
 
-ONE. **Colimits are universal**: Colimits in <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> commute with pullbacks.
+1. **Colimits are universal**: Colimits in <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> commute with pullbacks.
 
-ONE. **Effective epimorphisms are stable under pullback**: If <<<INLINEMATH>>> f: X \to Y <<</INLINEMATH>>> is an effective epimorphism, then for any map <<<INLINEMATH>>> Z \to Y <<</INLINEMATH>>>, the pullback <<<INLINEMATH>>> X \times_Y Z \to Z <<</INLINEMATH>>> is also an effective epimorphism.
+1. **Effective epimorphisms are stable under pullback**: If <<<INLINEMATH>>> f: X \to Y <<</INLINEMATH>>> is an effective epimorphism, then for any map <<<INLINEMATH>>> Z \to Y <<</INLINEMATH>>>, the pullback <<<INLINEMATH>>> X \times_Y Z \to Z <<</INLINEMATH>>> is also an effective epimorphism.
 
-ONE. **Groupoid objects are effective**: Every groupoid object in <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> has a colimit that realizes it as a quotient.
+1. **Groupoid objects are effective**: Every groupoid object in <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> has a colimit that realizes it as a quotient.
 
 
 
@@ -5069,11 +5069,11 @@ where:
 
 These functors satisfy:
 
-ONE. <<<INLINEMATH>>> \text{Disc} <<</INLINEMATH>>> and <<<INLINEMATH>>> \text{Codisc} <<</INLINEMATH>>> are fully faithful
+1. <<<INLINEMATH>>> \text{Disc} <<</INLINEMATH>>> and <<<INLINEMATH>>> \text{Codisc} <<</INLINEMATH>>> are fully faithful
 
-ONE. <<<INLINEMATH>>> \Pi <<</INLINEMATH>>> preserves finite products
+1. <<<INLINEMATH>>> \Pi <<</INLINEMATH>>> preserves finite products
 
-ONE. <<<INLINEMATH>>> \text{Disc} <<</INLINEMATH>>> preserves finite products
+1. <<<INLINEMATH>>> \text{Disc} <<</INLINEMATH>>> preserves finite products
 
 
 
@@ -5323,7 +5323,7 @@ An **(∞,2)-category** is a simplicial space <<<INLINEMATH>>> X_{\bullet,\bulle
 
 
 
-ONE. **Segal conditions**: For each <<<INLINEMATH>>> n <<</INLINEMATH>>>, the map
+1. **Segal conditions**: For each <<<INLINEMATH>>> n <<</INLINEMATH>>>, the map
 
    <<<BLOCKMATH>>>X_{n,\bullet} \to X_{1,\bullet} \times_{X_{0,\bullet}} \cdots \times_{X_{0,\bullet}} X_{1,\bullet}<<</BLOCKMATH>>>
 
@@ -5331,11 +5331,11 @@ ONE. **Segal conditions**: For each <<<INLINEMATH>>> n <<</INLINEMATH>>>, the ma
 
 
 
-ONE. **Completeness**: The map <<<INLINEMATH>>> X_{0,\bullet} \to X_{1,\bullet}^{\simeq} <<</INLINEMATH>>> (to invertible morphisms) is an equivalence
+1. **Completeness**: The map <<<INLINEMATH>>> X_{0,\bullet} \to X_{1,\bullet}^{\simeq} <<</INLINEMATH>>> (to invertible morphisms) is an equivalence
 
 
 
-ONE. **2-Segal conditions**: The vertical direction also satisfies Segal conditions
+1. **2-Segal conditions**: The vertical direction also satisfies Segal conditions
 
 
 
@@ -5599,13 +5599,13 @@ An **(∞,2)-topos** is an (∞,2)-category <<<INLINEMATH>>> \mathcal{X} <<</INL
 
 
 
-ONE. **2-Presentability**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> is accessible and admits all small (∞,2)-colimits
+1. **2-Presentability**: <<<INLINEMATH>>> \mathcal{X} <<</INLINEMATH>>> is accessible and admits all small (∞,2)-colimits
 
-ONE. **2-Exactness**: (∞,2)-colimits are universal—preserved by base change
+1. **2-Exactness**: (∞,2)-colimits are universal—preserved by base change
 
-ONE. **2-Descent**: Satisfies descent for (∞,2)-categorical hypercovers
+1. **2-Descent**: Satisfies descent for (∞,2)-categorical hypercovers
 
-ONE. **Local (∞,1)-topos structure**: Each hom-∞-category <<<INLINEMATH>>> \mathcal{X}(A,B) <<</INLINEMATH>>> forms an ∞-topos
+1. **Local (∞,1)-topos structure**: Each hom-∞-category <<<INLINEMATH>>> \mathcal{X}(A,B) <<</INLINEMATH>>> forms an ∞-topos
 
 
 
