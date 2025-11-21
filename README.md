@@ -24,43 +24,39 @@ node scripts/builder.js --no-watch # Single build, then exit
 ```
 
 **What it does:**
-- Converts HCT_*.txt source files to multiple output formats
-- Renders LaTeX mathematics (inline and display mode)
-- Generates table of contents with section numbering
-- Creates formatted PDFs using Puppeteer
-- Produces an index.html with file sizes and metadata
-- Watches for changes and rebuilds automatically
-- Implements content-addressed caching to avoid redundant builds
-- Manages parallel builds with a task scheduler
+- Converts source text files to HTML, PDF, and Markdown
+- Renders LaTeX mathematics using KaTeX
+- Generates PDFs via Puppeteer with proper page breaks
+- Creates an index with file metadata and cache-busting
+- Watches for changes and rebuilds incrementally
+- Provides socket-based debug interface (port 9999) for querying build state
 
-**Core mechanisms:**
-- Lazy evaluation pattern for deferred computation
-- Pull-based dependency graph for build orchestration
-- Causal debugging system that traces operation chains
-- Pipeline composition using functional transformations
-- Resource coordination to prevent file conflicts
-- Artifact barriers to ensure proper build sequencing
+**Implementation details:**
+- Lazy evaluation: computation deferred until results are pulled
+- Pull promises: async operations that only run when pulled
+- Causal debugger: traces event chains with timestamps and memory snapshots
+- Pipeline composition: HTML → PDF → Markdown transformations
+- Task scheduler: manages concurrent builds with priority queuing
+- Socket server: allows CLI queries of running build state via TCP
 
-### Configuration Architecture
+The build system uses a CONFIG object to specify all concrete details (file paths, time constants, priorities) while the code provides abstract computation patterns. The same lazy evaluation and pull-based machinery could orchestrate entirely different systems by changing only the CONFIG.
 
-The system uses a comprehensive CONFIG object that defines all specifics, while the machinery remains abstract. This separation enables the same computational substrate to manifest as different systems entirely.
+**Debug Interface:**
 
-**CONFIG controls:**
-- Time constants, scheduling priorities, and retry strategies
-- File paths, formats, and encoding specifications
-- Mathematical constants built from prime factorizations
-- Morphisms that transform between computational states
-- Actor types that perform different kinds of work
-- Contracts and invariants the system must maintain
+When running with `DEBUG=1`, a socket server starts on port 9999 allowing queries of the running build:
 
-**Abstract machinery provides:**
-- Universal computation patterns (lazy, pull-based, morphism application)
-- Generic dependency resolution and task scheduling
-- Structure-preserving transformations between representations
-- Artifact synchronization and barrier coordination
-- Resource management with linear safety guarantees
+```bash
+# Query recent events
+echo '{"id":1,"query":"events.recent","args":[10]}' | nc localhost 9999
 
-This architecture points toward a system where CONFIG fully specifies the computation topology while the code provides only the abstract categorical machinery - a complete separation of "what" from "how".
+# Check build state
+echo '{"id":2,"query":"build.cache","args":[]}' | nc localhost 9999
+
+# Performance metrics
+echo '{"id":3,"query":"perf.metrics","args":[]}' | nc localhost 9999
+```
+
+The debug interface provides event tracing, causal chains, performance profiling, and build state inspection. Responses use delta compression for large results and gzip compression for responses over 1KB.
 
 ## License
 
