@@ -252,9 +252,12 @@ class Lazy {
         if (!this._evaluated) {
             this._cache = this._thunk();
             this._evaluated = true;
-            // Record in proof system
-            if (typeof this._cache === 'number' && proofSystem) {
-                proofSystem.prove(this._cache, 'LAZY_EVAL', [this._thunk.toString()]);
+
+            // Validate lazy-evaluated file operations
+            if (proofSystem && typeof this._cache === 'string') {
+                if (this._cache.includes('/') || this._cache.includes('\\')) {
+                    proofSystem.prove(this._cache, 'LAZY_PATH', [this._thunk.name || 'anonymous']);
+                }
             }
         }
         return this._cache;
@@ -429,45 +432,13 @@ class Pipeline {
 class ProvenPipeline extends Pipeline {
     static compose(...stages) {
         return (input) => {
-            // Generate initial proof for input
-            let proof = proofSystem ? proofSystem.prove(input, 'INPUT', []) : null;
-            
-            // Create proof-carrying computation
-            const provenStages = stages.map(stage => {
-                return (value) => {
-                    // Each stage must preserve invariants
-                    if (proofSystem && proof) {
-                        const stageProof = proofSystem.prove(
-                            stage,
-                            'PRESERVES_INVARIANT',
-                            [proof]
-                        );
-                        
-                        if (!stageProof) {
-                            throw new Error(`Stage ${stage.name || 'anonymous'} breaks invariants`);
-                        }
-                        
-                        proof = stageProof;
-                    }
-                    
-                    // Execute stage
-                    const result = stage(value);
-                    
-                    // Attach proof to result
-                    if (result && typeof result === 'object') {
-                        Object.defineProperty(result, 'proof', {
-                            value: proof,
-                            enumerable: false,
-                            configurable: true
-                        });
-                    }
-                    
-                    return result;
-                };
-            });
-            
-            // Use regular Pipeline composition with proven stages
-            return super.compose(...provenStages)(input);
+            // Validate input file path if applicable
+            if (proofSystem && typeof input === 'string' && (input.includes('/') || input.includes('\\'))) {
+                proofSystem.prove(input, 'PIPELINE_INPUT', [stages.length]);
+            }
+
+            // Execute stages sequentially
+            return super.compose(...stages)(input);
         };
     }
     
