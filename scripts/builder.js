@@ -127,73 +127,34 @@ class ProofSystem {
     registerCoreTactics() {
         // Core tactics registered after system initialization
     }
-    
+
     // Register an inductive type
     registerType(inductiveType) {
         (this.types ||= new Map()).set(inductiveType.name, inductiveType);
     }
+
+    // Validate all traced computations lazily
+    validateAll() {
+        const unproven = [];
+        for (const [key, trace] of this.proofs) {
+            if (trace.type === 'obligation') {
+                unproven.push({ key, trace });
+            }
+        }
+        return unproven;
+    }
+
+    // Generate missing proofs for obligations
+    proveObligation(obligation) {
+        const tactic = this.tactics.get(obligation.functor) || TACTICS.auto;
+        if (tactic && tactic.apply) {
+            const state = { goal: obligation.value, context: obligation.inputs };
+            return tactic.apply(state);
+        }
+        return null;
+    }
 }
 
-// Upgrade ProofSystem to be lazy and self-verifying
-class LazyProofSystem extends ProofSystem {
-    constructor() {
-        super();
-        
-        // Lazy proof generation - deferred until needed
-        this.proofGenerator = null; // Will be initialized after Lazy is defined
-        
-        // Lazy self-verification
-        this.verifier = null; // Will be initialized after fix is defined
-        
-        // Lazy proof cache
-        this.lazyProofs = new Map();
-    }
-    
-    initializeLazy(Lazy, fix) {
-        // Lazy proof generation
-        this.proofGenerator = new Lazy(() => {
-            // Auto-generate proofs for all traced computations
-            for (const [value, trace] of proofTrace) {
-                if (!this.hasProof(value)) {
-                    this.generateProof(value, trace);
-                }
-            }
-            return this;
-        });
-        
-        // Lazy self-verification using fixed-point combinator
-        this.verifier = fix(self => new Lazy(() => {
-            // Self-verify the proof system using itself
-            const selfProof = this.prove(this, 'SELF_VERIFICATION', [self]);
-            return selfProof;
-        }));
-    }
-    
-    generateProof(value, trace) {
-        // Check cache first
-        if (this.lazyProofs.has(value)) {
-            return this.lazyProofs.get(value);
-        }
-        
-        // Create lazy proof
-        const lazyProof = new Lazy(() => {
-            const tactic = Maybe.elim(
-                () => 'Maybe',
-                () => this.tactics.get('auto'),
-                t => t
-            )(this.tactics.get(trace.functor));
-            const state = { goal: value, context: trace.inputs };
-            return Maybe.elim(
-                () => 'Maybe',
-                () => trace,
-                t => t.apply ? t.apply(state) : t(state)
-            )(tactic);
-        });
-        
-        this.lazyProofs.set(value, lazyProof);
-        return lazyProof;
-    }
-}
 
 // Lazy TypeChecker - will be initialized after Lazy class is defined
 let lazyTypeChecker;
@@ -407,60 +368,6 @@ class Pipeline {
         });
     }
     
-    // Natural transformation between functors
-    static naturalTransform(sourceFunctor, targetFunctor, transform) {
-        return {
-            // Apply natural transformation
-            apply: (x) => {
-                const lifted = sourceFunctor.lift(x);
-                const transformed = transform(lifted);
-                return targetFunctor.map(transformed, y => y);
-            },
-            
-            // Verify naturality condition
-            verifyNaturality: (f, x) => {
-                // η(F(f)(x)) = G(f)(η(x))
-                const left = transform(sourceFunctor.map(x, f));
-                const right = targetFunctor.map(transform(x), f);
-                return JSON.stringify(left) === JSON.stringify(right);
-            }
-        };
-    }
-}
-
-// Proof-carrying pipeline
-class ProvenPipeline extends Pipeline {
-    static compose(...stages) {
-        return (input) => {
-            // Validate input file path if applicable
-            if (proofSystem && typeof input === 'string' && (input.includes('/') || input.includes('\\'))) {
-                proofSystem.prove(input, 'PIPELINE_INPUT', [stages.length]);
-            }
-
-            // Execute stages sequentially
-            return super.compose(...stages)(input);
-        };
-    }
-    
-    static kleisli(f, g) {
-        return (x) => {
-            const fx = f(x);
-            const proof = fx && fx.proof;
-            
-            const result = fx instanceof Lazy ? fx.flatMap(g) : g(fx);
-            
-            // Propagate proof
-            if (result && typeof result === 'object' && proof) {
-                Object.defineProperty(result, 'proof', {
-                    value: proof,
-                    enumerable: false,
-                    configurable: true
-                });
-            }
-            
-            return result;
-        };
-    }
 }
 
 // Comonadic context for configuration
@@ -503,30 +410,6 @@ class ConfigContext {
         return this.extend(ctx => 
             new Lazy(() => computation(ctx.environment.value))
         );
-    }
-}
-
-// IO monad for effects
-class IO {
-    constructor(effect) {
-        this.effect = effect instanceof Lazy ? effect : new Lazy(effect);
-    }
-    
-    static of(value) {
-        return new IO(() => value);
-    }
-    
-    map(f) {
-        return new IO(() => f(this.effect.value));
-    }
-    
-    flatMap(f) {
-        return new IO(() => f(this.effect.value).effect.value);
-    }
-    
-    // Only run effects at the boundary
-    static unsafeRun(io) {
-        return io.effect.value;
     }
 }
 
@@ -1146,14 +1029,14 @@ class LazyFS {
     write(path, content) {
         return new PullPromise(async () => {
             causalDebugger.trace('FS_WRITE', { path });
-            
+
             // Handle LazyTemplate specially
             if (content instanceof LazyTemplate) {
                 content = content.toString();
             } else if (content instanceof Lazy) {
                 content = content.value;
             }
-            
+
             // Linear type: consume write token
             const writeToken = { resource: 'write', path };
             if (processingCoordinator.consumed.has(writeToken)) {
@@ -1161,7 +1044,7 @@ class LazyFS {
             }
             processingCoordinator.consumed.add(writeToken);
             processingCoordinator.linearResources.add(`write:${path}`);
-            
+
             try {
                 await fs.promises.writeFile(path, content);
                 return path;
@@ -2025,12 +1908,29 @@ const Vec = (elementType, length) => {
     });
 };
 
+// Natural number type
+const NatType = { contains: n => typeof n === 'number' && n >= 0 && Number.isInteger(n) };
+
 // Refinement types - values with proofs
 const Refinement = (baseType, predicate) => {
     return new DependentType('x', baseType, (x) => {
         if (!predicate(x)) throw new Error(`Value ${x} fails refinement`);
         return { base: baseType, proof: predicate(x) };
     });
+};
+
+// Validate array with expected length using Vec
+const validateVec = (arr, expectedLength, description) => {
+    if (!Array.isArray(arr)) {
+        throw new Error(`${description}: expected array, got ${typeof arr}`);
+    }
+    if (arr.length !== expectedLength) {
+        throw new Error(`${description}: expected length ${expectedLength}, got ${arr.length}`);
+    }
+    if (proofSystem) {
+        proofSystem.prove(arr, 'VEC_VALID', [expectedLength, description]);
+    }
+    return arr;
 };
 
 // TACTICS
@@ -4833,9 +4733,8 @@ class CausalDebugger {
 
 causalDebugger = new CausalDebugger();
 
-// Create generalized proof assistant instances
+// Create proof system with deferred validation
 proofSystem = new ProofSystem();
-// Initialize universes now that numbers exist
 proofSystem.initializeUniverses(Lazy, 0, 1, 2, 3);
 const ProofTracer = lazyProofTracer.value;
 proofTracer = new ProofTracer();
@@ -10119,6 +10018,9 @@ async function watch() {
         if (file.dependencies) {
             const deps = file.dependencies.value;
             for (const [output, inputs] of Object.entries(deps)) {
+                // Validate dependency array length
+                validateVec(inputs, 1, `${file.txt}.${output} dependencies`);
+
                 const outputId = `${file.txt}.${output}`;
                 pullGraph.register(outputId, new Lazy(() => buildId));
                 
