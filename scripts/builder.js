@@ -21,26 +21,44 @@ let linearTypes;
 
 const proofTrace = new Map();
 
-// Direct value tracing - must be available before any constants
+// Trace computations with their provenance
 const recordComputation = (value, functor, inputs) => {
-    if (typeof value === 'number' && isFinite(value)) {
-        proofTrace.set(value, {
+    const key = makeTraceKey(value);
+    if (key !== null) {
+        proofTrace.set(key, {
+            value,
             functor,
             inputs,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            type: typeof value
         });
     }
     return value;
 };
 
+// Generate stable key for tracing
+const makeTraceKey = (value) => {
+    if (typeof value === 'number' && isFinite(value)) return value;
+    if (typeof value === 'string') return `str:${value}`;
+    if (typeof value === 'boolean') return `bool:${value}`;
+    if (Array.isArray(value)) return `arr:${JSON.stringify(value)}`;
+    if (value && typeof value === 'object' && value.constructor === Object) {
+        return `obj:${JSON.stringify(value)}`;
+    }
+    return null;
+};
+
 const traced = (name, fn) => {
     return (...args) => {
         const result = fn(...args);
-        if (typeof result === 'number' && isFinite(result)) {
-            proofTrace.set(result, {
+        const key = makeTraceKey(result);
+        if (key !== null) {
+            proofTrace.set(key, {
+                value: result,
                 functor: name,
                 inputs: args,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                type: typeof result
             });
         }
         return result;
@@ -85,11 +103,25 @@ class ProofSystem {
     }
     
     hasProof(value) {
-        return this.proofs.has(value);
+        const key = makeTraceKey(value);
+        return key !== null && this.proofs.has(key);
     }
-    
+
     getProof(value) {
-        return this.proofs.get(value);
+        const key = makeTraceKey(value);
+        return key !== null ? this.proofs.get(key) : undefined;
+    }
+
+    createObligation(spec) {
+        const key = `obligation:${spec.proposition}`;
+        proofTrace.set(key, {
+            value: spec,
+            functor: 'OBLIGATION',
+            inputs: [spec.context],
+            timestamp: Date.now(),
+            type: 'obligation'
+        });
+        return spec;
     }
     
     registerCoreTactics() {
@@ -4855,6 +4887,8 @@ const reflection = new Reflection();
 // Base types for DependentType validation
 const NumberType = { contains: v => typeof v === 'number' };
 const StringType = { contains: v => typeof v === 'string' };
+const BoolType = { contains: v => typeof v === 'boolean' };
+const ArrayType = { contains: v => Array.isArray(v) };
 
 // Refinement types for CONFIG validation
 const PositiveInt = Refinement(NumberType, n => n > 0 && Number.isInteger(n));
@@ -4866,6 +4900,43 @@ const ValidPath = Refinement(StringType, p => {
         return false;
     }
 });
+const NonEmptyString = Refinement(StringType, s => s.length > 0);
+
+// Validate CONFIG paths at startup
+const validateConfigPaths = () => {
+    const paths = [
+        CONFIG.documents.artifacts.workingDoc.txt,
+        CONFIG.documents.artifacts.primerDoc.txt
+    ];
+
+    paths.forEach(p => {
+        try {
+            ValidPath.apply(p);
+            proofSystem.prove(p, 'PATH_VALID', [p]);
+        } catch (e) {
+            console.warn(`[CONFIG] Invalid path: ${p}`);
+        }
+    });
+};
+
+// Validate CONFIG numeric constraints
+const validateConfigNumbers = () => {
+    const checks = [
+        [CONFIG.processing.polling.intervalMs, 'polling.intervalMs'],
+        [CONFIG.processing.content.maxHeadingLevel, 'content.maxHeadingLevel'],
+        [CONFIG.processing.content.minGroupSize, 'content.minGroupSize'],
+        [CONFIG.processing.hash.byteLength, 'hash.byteLength']
+    ];
+
+    checks.forEach(([value, name]) => {
+        try {
+            PositiveInt.apply(value);
+            proofSystem.prove(value, 'CONFIG_VALID', [name]);
+        } catch (e) {
+            console.error(`[CONFIG] Invalid ${name}: ${value}`);
+        }
+    });
+};
 
 // File existence checking tactic
 const checkInputsExist = new Tactic('checkInputs', (state) => {
@@ -10056,10 +10127,14 @@ async function watch() {
     }
     
     
+    // Validate CONFIG before starting build
+    validateConfigPaths();
+    validateConfigNumbers();
+
     // Register build dependencies in pull graph using CONFIG
     for (const file of FILES) {
         const buildId = `build-${file.txt}`;
-        
+
         // Register build task
         pullGraph.register(buildId, new Lazy(async () => {
             const result = await buildFile(file);
