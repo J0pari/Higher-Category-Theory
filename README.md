@@ -8,7 +8,7 @@ The repository contains two primary documents:
 - **HCT Primer** (153KB): A systematic introduction to higher category theory foundations
 - **HCT Working** (154KB): Applications and connections to concrete examples
 
-View the formatted versions at the [index portal](https://j0pari.github.io/Higher-Category-Theory/).
+View the formatted versions at the [index portal](https://j0pari.github.io/Higher-Category-Theory/output/).
 
 ## Build System
 
