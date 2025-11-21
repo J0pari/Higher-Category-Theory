@@ -7286,15 +7286,16 @@ class LaTeXProcessor {
         
         try {
             result = result.replace(/\\begin\{array\}(?:\{[^}]*\})?([\s\S]+?)\\end\{array\}/g, (m, content) => {
-                // The column spec is non-capturing, so content is the first capture group
-                const rows = content.trim().split('\\\\').filter(r => r.trim()).map(row => {
+                // Split on \\ or \newline (row separators)
+                const rows = content.trim().split(/(?:\\\\|\\newline)/g).filter(r => r.trim());
+                const renderedRows = rows.map(row => {
                     const cells = row.split('&').map(cell => {
                         const processed = this.processTeX(cell.trim());
                         return `<td class="array-cell">${processed}</td>`;
                     });
                     return `<tr>${cells.join('')}</tr>`;
                 });
-                return `<table class="array-math"><tbody>${rows.join('')}</tbody></table>`;
+                return `<table class="array-math"><tbody>${renderedRows.join('')}</tbody></table>`;
             });
             
             // Handle aligned environments for commutative diagrams
