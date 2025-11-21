@@ -2663,16 +2663,16 @@ CONFIG_RAW.scheduler = {
     debounceDelay: 500
 };
 
-CONFIG_RAW.substrate = {
-    temporal: {
-        tick: 100
+CONFIG_RAW.processing = {
+    polling: {
+        intervalMs: 100
     },
-    topology: {
-        dimensions: 6,
-        clustering: 3
+    content: {
+        maxHeadingLevel: 6,
+        minGroupSize: 3
     },
-    information: {
-        byte: 8
+    hash: {
+        byteLength: 8
     }
 };
 
@@ -2814,13 +2814,7 @@ CONFIG_RAW.contracts = {
 };
 
 // MANIFESTATION: How abstract computation becomes concrete
-CONFIG_RAW.manifestation = {
-    // Current manifestation: document generation
-    // But could be: protein folding, weather simulation, blockchain mining, etc.
-    current: 'documents',
-    
-    // Document-specific manifestation (current active profile)
-    documents: {
+CONFIG_RAW.documents = {
         content: {
             experienceTitle: 'Higher Category Theory Through Human Experience',
             experienceDescription: 'An exploration of higher category theory through practical examples and human-scale analogies, bridging abstract mathematics with concrete experience.',
@@ -2900,10 +2894,10 @@ Object.assign(CONFIG_RAW, {
     
     // Processor - uses substrate.topology
     processor: {
-        hashLength: CONFIG_RAW.substrate.information.byte,
+        hashLength: CONFIG_RAW.processing.hash.byteLength,
         sectionIdMaxLength: 100,
-        headingMaxLevels: CONFIG_RAW.substrate.topology.dimensions,
-        minGroupSize: CONFIG_RAW.substrate.topology.clustering,
+        headingMaxLevels: CONFIG_RAW.processing.content.maxHeadingLevel,
+        minGroupSize: CONFIG_RAW.processing.content.minGroupSize,
         tocMaxDepth: 2,  // 2 levels in TOC
         subSectionLevel: 3,  // level 3 is subsection
         scrollHighlightThreshold: 100,  // 100px
@@ -2994,18 +2988,18 @@ Object.assign(CONFIG_RAW, {
     },
     
     // Legacy document metadata - now in manifestation.documents.content
-    content: CONFIG_RAW.manifestation?.documents?.content || {
+    content: CONFIG_RAW.documents?.content || {
         experienceTitle: 'Higher Category Theory Through Human Experience',
         experienceDescription: 'An exploration of higher category theory through practical examples and human-scale analogies, bridging abstract mathematics with concrete experience.',
         primerTitle: 'Higher Category Theory: A Primer',
         primerDescription: 'A systematic introduction to higher category theory, covering simplicial sets, fibrations, limits, topoi, and their applications in modern mathematics.',
         defaultDescription: 'A comprehensive document on higher category theory and its mathematical foundations.',
     },
-    
-    // Legacy files - now in manifestation.documents.artifacts
+
+    // Legacy files - now in documents.artifacts
     files: (() => {
-        const artifacts = CONFIG_RAW.manifestation?.documents?.artifacts || {};
-        const formats = CONFIG_RAW.manifestation?.documents?.formats || {};
+        const artifacts = CONFIG_RAW.documents?.artifacts || {};
+        const formats = CONFIG_RAW.documents?.formats || {};
         return {
             sourcePattern: '**/*.txt',
             workingDoc: {
