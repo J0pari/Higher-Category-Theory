@@ -2206,13 +2206,18 @@ class Extractor {
     // Generate optimized JavaScript from proof
     compile(proof) {
         const extracted = this.extract(proof);
-        
+
         // Generate code string
         if (typeof extracted === 'function') {
             return extracted.toString();
         }
-        
+
         return `() => ${JSON.stringify(extracted)}`;
+    }
+
+    // Register custom extractor
+    register(name, fn) {
+        this.extractors.set(name, fn);
     }
 }
 
@@ -2283,116 +2288,19 @@ class Reflection {
             proofSystem
         };
     }
-}
 
-// BOOTSTRAP
-
-class Bootstrap {
-    constructor() {
-        this.verified = new Set();
-        this.proofs = new Map();
-    }
-    
-    // Verify that a component is correct
-    verify(component, specification) {
-        const proof = this.proveCorrectness(component, specification);
-        
-        if (proof) {
-            this.verified.add(component);
-            this.proofs.set(component, proof);
-            return true;
-        }
-        
-        return false;
-    }
-    
-    // Prove that component meets specification
-    proveCorrectness(component, spec) {
-        const state = {
-            goal: spec,
-            context: [],
-            component
-        };
-        
-        // Try to prove automatically
-        const result = TACTICS.auto.apply(state);
-        
-        if (!result.goal) {
-            return result.proof;
-        }
-        
-        return null;
-    }
-    
-    // Self-verify the proof system
-    selfVerify() {
-        // Verify ProofSystem
-        const proofSystemSpec = {
-            type: 'Specification',
-            requires: [],
-            ensures: ['hasProof returns boolean', 'getProof returns proof or undefined']
-        };
-        
-        this.verify(ProofSystem, proofSystemSpec);
-        
-        // Verify Tactics
-        const tacticSpec = {
-            type: 'Specification',
-            requires: ['state with goal'],
-            ensures: ['returns new state', 'preserves context']
-        };
-        
-        for (const [name, tactic] of Object.entries(TACTICS)) {
-            if (tactic instanceof Tactic) {
-                this.verify(tactic, tacticSpec);
-            }
-        }
-        
-        // Verify Extractor
-        const extractorSpec = {
-            type: 'Specification',
-            requires: ['proof term'],
-            ensures: ['returns executable code']
-        };
-        
-        this.verify(Extractor, extractorSpec);
-        
-        return this.verified.size;
-    }
-    
-    // Generate proof certificate
-    certificate() {
+    // Introspect a proof system's state
+    introspect(ps) {
         return {
-            verified: Array.from(this.verified),
-            proofs: Array.from(this.proofs.entries()),
-            timestamp: Date.now(),
-            hash: this.computeHash()
+            proofs: ps.proofs.size,
+            universes: Array.from(ps.universes.keys()),
+            unproven: Array.from(proofTrace.keys())
+                .filter(v => !ps.hasProof(v))
+                .slice(0, 10)
         };
-    }
-    
-    computeHash() {
-        const content = JSON.stringify({
-            verified: Array.from(this.verified).map(c => c.name || c.toString()),
-            count: this.verified.size
-        });
-        
-        // Simple hash
-        let hash = 0;
-        for (let i = 0; i < content.length; i++) {
-            hash = ((hash << 5) - hash) + content.charCodeAt(i);
-            hash = hash & hash;
-        }
-        return hash.toString(16);
     }
 }
 
-// Create global instances
-const extractor = new Extractor();
-const reflection = new Reflection();
-const bootstrap = new Bootstrap();
-
-// Self-verify on startup
-bootstrap.selfVerify();
 
 const TIME = {
     TICK: 100,
@@ -2813,46 +2721,44 @@ CONFIG_RAW.contracts = {
     }
 };
 
-// MANIFESTATION: How abstract computation becomes concrete
 CONFIG_RAW.documents = {
-        content: {
-            experienceTitle: 'Higher Category Theory Through Human Experience',
-            experienceDescription: 'An exploration of higher category theory through practical examples and human-scale analogies, bridging abstract mathematics with concrete experience.',
-            primerTitle: 'Higher Category Theory: A Primer',
-            primerDescription: 'A systematic introduction to higher category theory, covering simplicial sets, fibrations, limits, topoi, and their applications in modern mathematics.',
-            defaultDescription: 'A comprehensive document on higher category theory and its mathematical foundations.'
+    content: {
+        experienceTitle: 'Higher Category Theory Through Human Experience',
+        experienceDescription: 'An exploration of higher category theory through practical examples and human-scale analogies, bridging abstract mathematics with concrete experience.',
+        primerTitle: 'Higher Category Theory: A Primer',
+        primerDescription: 'A systematic introduction to higher category theory, covering simplicial sets, fibrations, limits, topoi, and their applications in modern mathematics.',
+        defaultDescription: 'A comprehensive document on higher category theory and its mathematical foundations.'
+    },
+
+    artifacts: {
+        workingDoc: {
+            name: 'HCT Working Document',
+            txt: 'src/HCT_working.txt',
+            pdf: 'output/working.pdf',
+            html: 'output/working.html',
+            md: 'output/working.md'
         },
-        
-        artifacts: {
-            workingDoc: {
-                name: 'HCT Working Document',
-                txt: 'src/HCT_working.txt',
-                pdf: 'output/working.pdf',
-                html: 'output/working.html',
-                md: 'output/working.md'
-            },
-            primerDoc: {
-                name: 'HCT Primer',
-                txt: 'src/HCT_primer.txt',
-                pdf: 'output/primer.pdf',
-                html: 'output/primer.html',
-                md: 'output/primer.md'
-            },
-            indexFile: 'output/index.html',
-            readmeFile: 'output/README.md',
-            lockFile: 'temp/.build.lock',
-            buildScript: 'scripts/builder.js'
+        primerDoc: {
+            name: 'HCT Primer',
+            txt: 'src/HCT_primer.txt',
+            pdf: 'output/primer.pdf',
+            html: 'output/primer.html',
+            md: 'output/primer.md'
         },
-        
-        formats: {
-            extensions: {
-                txt: '.txt',
-                pdf: '.pdf',
-                html: '.html',
-                md: '.md'
-            },
-            defaultOutputFormats: ['html', 'markdown', 'pdf']
-        }
+        indexFile: 'output/index.html',
+        readmeFile: 'output/README.md',
+        lockFile: 'temp/.build.lock',
+        buildScript: 'scripts/builder.js'
+    },
+
+    formats: {
+        extensions: {
+            txt: '.txt',
+            pdf: '.pdf',
+            html: '.html',
+            md: '.md'
+        },
+        defaultOutputFormats: ['html', 'markdown', 'pdf']
     }
 };
 
@@ -4942,6 +4848,46 @@ const Result = new InductiveType('Result', [
     { name: 'Err', matches: v => v && v.error }
 ]);
 
+// Initialize proof system components for validation
+const extractor = new Extractor();
+const reflection = new Reflection();
+
+// Base types for DependentType validation
+const NumberType = { contains: v => typeof v === 'number' };
+const StringType = { contains: v => typeof v === 'string' };
+
+// Refinement types for CONFIG validation
+const PositiveInt = Refinement(NumberType, n => n > 0 && Number.isInteger(n));
+const NonNegativeInt = Refinement(NumberType, n => n >= 0 && Number.isInteger(n));
+const ValidPath = Refinement(StringType, p => {
+    try {
+        return fs.existsSync(p);
+    } catch {
+        return false;
+    }
+});
+
+// File existence checking tactic
+const checkInputsExist = new Tactic('checkInputs', (state) => {
+    const missing = state.inputs.filter(f => !fs.existsSync(f));
+    if (missing.length > 0) {
+        throw new Error(`Missing inputs: ${missing.join(', ')}`);
+    }
+    return { ...state, proven: true };
+});
+
+// Extractors for socket queries
+extractor.register('proofSystem', (ps) => ({
+    totalProofs: ps.proofs.size,
+    universes: ps.universes.size
+}));
+
+extractor.register('scheduler', (sched) => ({
+    queue: sched.queue.length,
+    running: Array.from(sched.running).map(t => t.name),
+    history: sched.buildHistory.size
+}));
+
 // BUILD SCHEDULER
 
 // Processing Coordinator - Air Traffic Control for math/markdown processing
@@ -4996,7 +4942,6 @@ class ProcessingCoordinator {
             systems: new Map([
                 ['ProofSystem', proofSystem],
                 ['PullGraph', pullGraph],
-                ['Bootstrap', bootstrap],
                 ['Extractor', extractor],
                 ['Reflection', reflection]
             ])
@@ -6544,29 +6489,25 @@ class BuildScheduler {
     }
     
     async scheduleProven(task, priority = CONFIG.scheduler.defaultPriority) {
-        // Generate proof obligation
-        const obligation = proofSystem.createObligation({
-            proposition: `safe(${task.name})`,
+        // Validate task inputs exist
+        const state = {
+            inputs: [task.file],
+            task: task.name,
             context: {
                 resources: this.coordinator.availableResources(),
                 history: this.buildHistory.get(task.file),
                 running: this.running.size
             }
-        });
-        
-        // Attempt to prove task is safe
-        const proof = await TACTICS.auto.apply(obligation);
-        
-        if (!proof) {
-            causalDebugger.trace('Cannot prove task safe', { task: task.name });
-            throw new Error(`Cannot prove ${task.name} safe to execute`);
+        };
+
+        try {
+            const validated = checkInputsExist.apply(state);
+            task.validated = validated.proven;
+        } catch (e) {
+            causalDebugger.trace('Task validation failed', { task: task.name, error: e.message });
+            throw e;
         }
-        
-        // Store proof with task
-        task.proof = proof;
-        this.provenBuilds.set(task.id, proof);
-        
-        // Proceed with regular scheduling
+
         return this.schedule(task, priority);
     }
     
@@ -10694,12 +10635,7 @@ if (isValidateOnly) {
             },
 
             state: {
-                scheduler: () => ({
-                    queue: scheduler.queue.length,
-                    running: scheduler.running.size,
-                    maxConcurrent: scheduler.maxConcurrent,
-                    buildHistory: scheduler.buildHistory.size
-                }),
+                scheduler: () => extractor.extract('scheduler', scheduler),
                 coordinator: () => ({
                     resources: processingCoordinator.resources.size,
                     conflicts: processingCoordinator.hasResourceConflicts(),
@@ -10709,7 +10645,9 @@ if (isValidateOnly) {
                     config: configPatternValidator.violations,
                     runtime: Array.from(causalDebugger.runtimeViolations),
                     proofs: Array.from(proofTrace.keys()).filter(v => !proofSystem.hasProof(v))
-                })
+                }),
+                proofs: () => extractor.extract('proofSystem', proofSystem),
+                reflection: () => reflection.introspect(proofSystem)
             },
 
             analyze: {
@@ -11084,12 +11022,7 @@ if (isValidateOnly) {
             },
 
             state: {
-                scheduler: () => ({
-                    queue: scheduler.queue.length,
-                    running: scheduler.running.size,
-                    maxConcurrent: scheduler.maxConcurrent,
-                    buildHistory: scheduler.buildHistory.size
-                }),
+                scheduler: () => extractor.extract('scheduler', scheduler),
                 coordinator: () => ({
                     resources: processingCoordinator.resources.size,
                     conflicts: processingCoordinator.hasResourceConflicts(),
@@ -11099,7 +11032,9 @@ if (isValidateOnly) {
                     config: configPatternValidator.violations,
                     runtime: Array.from(causalDebugger.runtimeViolations),
                     proofs: Array.from(proofTrace.keys()).filter(v => !proofSystem.hasProof(v))
-                })
+                }),
+                proofs: () => extractor.extract('proofSystem', proofSystem),
+                reflection: () => reflection.introspect(proofSystem)
             },
 
             analyze: {
@@ -11290,6 +11225,15 @@ if (isValidateOnly) {
         async function executeQuery(queryPath, args, cacheKey) {
             const parts = queryPath.split('.');
             let target = getFullDebugInterface();
+
+            // Check for extractor queries
+            if (parts[0] === 'extract' && parts.length === 2) {
+                const extractorName = parts[1];
+                const extracted = extractor.extract(extractorName, target);
+                if (extracted) {
+                    return { type: 'full', data: extracted };
+                }
+            }
 
             for (const part of parts) {
                 if (!target[part]) {
