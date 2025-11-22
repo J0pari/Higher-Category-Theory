@@ -588,11 +588,11 @@ class PullGraph {
                     }
                 }
                 
-                if (this.progressCallback && this.pullCount % 100 === 0) {
-                    this.progressCallback({ 
-                        pullCount: this.pullCount, 
+                if (this.progressCallback && this.pullCount % CONFIG.processing.progress.pullGraphLogInterval === 0) {
+                    this.progressCallback({
+                        pullCount: this.pullCount,
                         nodeId,
-                        stage: 'dependencies' 
+                        stage: 'dependencies'
                     });
                 }
                 
@@ -756,7 +756,7 @@ const initPullGraph = () => {
     if (!pullGraph) {
         pullGraph = new PullGraph();
         pullGraph.setProgressCallback((progress) => {
-            if (progress.pullCount % 1000 === 0) {
+            if (progress.pullCount % CONFIG.processing.progress.buildProgressLogInterval === 0) {
                 console.log(`[BUILD PROGRESS] Pulled ${progress.pullCount} nodes...`);
             }
         });
@@ -1104,8 +1104,8 @@ class LazyEventSystem {
     }
     
     // Get events matching predicate
-    query(predicate, limit = 10) {
-        return new Lazy(() => 
+    query(predicate, limit = CONFIG.events.defaultQueryLimit) {
+        return new Lazy(() =>
             this.events
                 .filter(predicate)
                 .take(limit)
@@ -1306,29 +1306,27 @@ class LazyEventSystem {
 
     calculatePercentile(duration) {
         if (!traceOrchestrator) {
-            // Fallback to simple percentile calculation
-            if (duration < TIME.TICK) return 50;
-            if (duration < TIME.SECOND) return 70;
-            if (duration < TIME.TIMEOUT) return 90;
-            return 95;
+            if (duration < TIME.TICK) return CONFIG.performance.percentileThresholds.median;
+            if (duration < TIME.SECOND) return CONFIG.performance.percentileThresholds.good;
+            if (duration < TIME.TIMEOUT) return CONFIG.performance.percentileThresholds.slow;
+            return CONFIG.performance.percentileThresholds.verySlow;
         }
 
-        // Use TraceOrchestrator performance profile for accurate percentiles
         const profile = traceOrchestrator.getPerformanceProfile();
         const allDurations = Object.values(profile).map(p => p.avg);
 
         if (allDurations.length === 0) {
-            if (duration < TIME.TICK) return 50;
-            if (duration < TIME.SECOND) return 70;
-            if (duration < TIME.TIMEOUT) return 90;
-            return 95;
+            if (duration < TIME.TICK) return CONFIG.performance.percentileThresholds.median;
+            if (duration < TIME.SECOND) return CONFIG.performance.percentileThresholds.good;
+            if (duration < TIME.TIMEOUT) return CONFIG.performance.percentileThresholds.slow;
+            return CONFIG.performance.percentileThresholds.verySlow;
         }
 
         allDurations.sort((a, b) => a - b);
         const index = allDurations.findIndex(d => d >= duration);
-        if (index === -1) return 99;
+        if (index === -1) return CONFIG.performance.percentileThresholds.extreme;
 
-        return Math.floor((index / allDurations.length) * 100);
+        return Math.floor((index / allDurations.length) * CONFIG.performance.percentileThresholds.percentBase);
     }
 
     assessViolationSeverity(event) {
@@ -2057,12 +2055,34 @@ class ConfigPatternValidator {
             return false;
         }
 
+        // Constants that provide no semantic value over literals
+        // Configuration should represent domain concepts, not wrap basic values
+        const unnecessaryIndirections = [
+            { pattern: /\.zero$/, value: 0, semantic: 'numeric literal' },
+            { pattern: /\.one$/, value: 1, semantic: 'numeric literal' },
+            { pattern: /\.two$/, value: 2, semantic: 'numeric literal' },
+            { pattern: /\.empty(Check)?Threshold$/, value: 0, semantic: 'empty state indicator' },
+            { pattern: /\.topLevelSection$/, value: 1, semantic: 'root hierarchy level' },
+        ];
+
+        for (const { pattern, value: expectedValue, semantic } of unnecessaryIndirections) {
+            if (pattern.test(path) && value === expectedValue) {
+                this.violations.push({
+                    type: 'UNNECESSARY_INDIRECTION',
+                    path,
+                    value,
+                    message: `Configuration wraps ${semantic} without domain-specific meaning`
+                });
+                return false;
+            }
+        }
+
         this.magicNumbers.add(`${path} = ${value}`);
         this.violations.push({
-            type: 'MAGIC_NUMBER',
+            type: 'LITERAL_VALUE',
             path,
             value,
-            message: `Value ${value} at ${path} is a literal magic number - replace with CONFIG constant`
+            message: `Numeric value should be replaced with named configuration constant`
         });
 
         return true;
@@ -2171,15 +2191,24 @@ class ConfigPatternValidator {
             delete byType.MISSING_RECORD_COMPUTATION;
         }
         
-        if (byType.MAGIC_NUMBER) {
+        if (byType.UNNECESSARY_INDIRECTION) {
+            console.error(`\n[UNNECESSARY_INDIRECTION] (${byType.UNNECESSARY_INDIRECTION.length}) Configuration constants that should be replaced with literals:`);
+            for (const v of byType.UNNECESSARY_INDIRECTION) {
+                console.error(`  ${v.path} = ${v.value}`);
+                console.error(`    ${v.message}`);
+            }
+            delete byType.UNNECESSARY_INDIRECTION;
+        }
+
+        if (byType.LITERAL_VALUE) {
             const valueGroups = {};
-            for (const v of byType.MAGIC_NUMBER) {
+            for (const v of byType.LITERAL_VALUE) {
                 if (!valueGroups[v.value]) valueGroups[v.value] = [];
 
                 valueGroups[v.value].push(v.path);
             }
-            
-            console.error(`\nMAGIC_NUMBER (${byType.MAGIC_NUMBER.length}) - True literals that need replacement:`);
+
+            console.error(`\n[LITERAL_VALUE] (${byType.LITERAL_VALUE.length}) Numeric values that should be named constants:`);
             for (const [value, paths] of Object.entries(valueGroups)) {
                 // Identify which object this comes from
                 const sources = paths.map(p => p.split('.')[0]);
@@ -2187,23 +2216,22 @@ class ConfigPatternValidator {
                 const sourceText = uniqueSources.length === 1 ? ` [from ${uniqueSources[0]}]` : '';
                 
                 if (paths.length > 1) {
-                    console.error(`  ✗ Value ${value} appears ${paths.length} times${sourceText}:`);
-                    paths.forEach(p => console.error(`      ${p}`));
+                    console.error(`  Value ${value} appears ${paths.length} times${sourceText}:`);
+                    paths.forEach(p => console.error(`    ${p}`));
                 } else {
-                    console.error(`  ✗ ${paths[0]} = ${value}${sourceText} (replace with computed constant)`);
+                    console.error(`  ${paths[0]} = ${value}${sourceText}`);
                 }
             }
-            delete byType.MAGIC_NUMBER;
+            delete byType.LITERAL_VALUE;
         }
         
         for (const [type, violations] of Object.entries(byType)) {
             console.error(`\n${type} (${violations.length}):`);
-            for (const v of violations.slice(0, 10)) {  // Show first 10
+            for (const v of violations.slice(0, CONFIG.reporting.defaultDisplayLimit)) {
                 console.error(`  - ${v.message}`);
             }
-            const limit = 10;
-            if (violations.length > limit) {
-                console.error(`  ... and ${violations.length - limit} more`);
+            if (violations.length > CONFIG.reporting.defaultDisplayLimit) {
+                console.error(`  ... and ${violations.length - CONFIG.reporting.defaultDisplayLimit} more`);
             }
         }
         
@@ -2255,7 +2283,41 @@ CONFIG_RAW.processing = {
     },
     hash: {
         byteLength: 8
+    },
+    progress: {
+        pullGraphLogInterval: 100,
+        buildProgressLogInterval: 1000
     }
+};
+
+CONFIG_RAW.events = {
+    defaultQueryLimit: 10
+};
+
+CONFIG_RAW.performance = {
+    percentileThresholds: {
+        median: 50,
+        good: 70,
+        slow: 90,
+        verySlow: 95,
+        extreme: 99,
+        percentBase: 100
+    }
+};
+
+CONFIG_RAW.reporting = {
+    defaultDisplayLimit: 10,
+    maxDisplayResults: 20
+};
+
+CONFIG_RAW.storage = {
+    maxEventCapacity: 10000,
+    maxMapCapacity: 1000
+};
+
+CONFIG_RAW.resources = {
+    defaultBorrowDuration: 1000,
+    defaultWaitEstimate: 100
 };
 
 // MORPHISMS: Transformations between computational states
@@ -3133,9 +3195,7 @@ Object.assign(CONFIG_RAW, {
             ease: 'ease',
         },
         // Print-specific (using PRINT category)
-        pdfMargin: `${PRINT.pdfMarginFraction}in`,
-        // Numeric constants  
-        zero: 0
+        pdfMargin: `${PRINT.pdfMarginFraction}in`
     },
     
     // External URLs
@@ -3306,84 +3366,110 @@ for (const [name, obj] of Object.entries(ALL_CONFIGS)) {
 }
 
 
-// Check violations
 configPatternValidator.report();
+scanCodebaseForConfigurableValues();
 
-// Create proxied CONFIG that will detect deprecated access at runtime
 const CONFIG_PROXY = configPatternValidator.createProxy(CONFIG);
 
-// Sophisticated context-aware magic number detector
-function detectMagicNumberInCode(value, context) {
-    // Extract numbers from any context - strings, templates, etc
-    const extractNumbers = (input) => {
-        try {
-            checkType(input, NumberType);
-            return [input];
-        } catch {}
+function scanCodebaseForConfigurableValues() {
+    const fileContent = fs.readFileSync(__filename, 'utf8');
+    const findings = [];
+    const numericPattern = /(?<![.0-9a-zA-Z_])(-?\d+(?:\.\d+)?)(?![.0-9a-zA-Z_])/g;
+    const lines = fileContent.split('\n');
 
-        try {
-            checkType(input, StringType);
-            // Skip comments, explanatory text, and variable names
-            if (input.includes('//') || input.includes('/*') || input.includes('*')) return [];
-            if (/\b(p\d+|PRIMES|CONFIG|TIME|COMMON|LIMITS|SPACE|BINARY)\b/.test(input)) return [];
+    const excludedLines = new Set();
 
-            // Extract actual numeric literals from strings
-            const matches = input.match(/\b\d+(\.\d+)?\b/g);
-            return matches ? matches.map(Number) : [];
-        } catch {}
+    const allConfigNames = Object.keys(ALL_CONFIGS).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const patterns = [
+        new RegExp(`\\b(${allConfigNames})(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*\\s*=\\s*\\{`, 'g'),
+        new RegExp(`Object\\.assign\\s*\\(\\s*(${allConfigNames})\\s*,\\s*\\{`, 'g'),
+        /\b[a-zA-Z_][a-zA-Z0-9_]*:\s*\{/g
+    ];
 
-        return [];
-    };
-    
-    const numbers = extractNumbers(value);
-    if (numbers.length === 0) return;
-    
-    for (const num of numbers) {
-        // Skip booleans disguised as numbers
-        if (num === true || num === false) continue;
-        
-        // Skip if it's from a known good source
-        if (context && /\b(CONFIG|TIME|LIMITS|SPACE|PRIMES|COMMON|BINARY)\b/.test(context)) continue;
-        
-        // Skip array indices and object access patterns
-        if (context && /\[\d+\]|\.\d+/.test(context)) continue;
-        
-        // Skip legitimate mathematical constants
-        const legitimateConstants = [
-            0, 1, 2, -1,
-            3, 5, 7,
-            4, 6, 10,
-            10, 12, 50, 60, 100,
-            THOUSAND, 1024, 1048576,
-            1000, 1
-        ];
-        
-        if (legitimateConstants.includes(num)) continue;
-        
-        // Skip powers of 2 (often used for binary operations)
-        if (num > 0 && (num & (num - 1)) === 0) continue;
-        
-        // Skip version numbers, ports, status codes (contextual)
-        if (context && /version|port|status|code|error/i.test(context)) continue;
-        
-        // Found a magic number!
-        console.warn(`[MAGIC NUMBER] ${num} found in ${context || 'unknown context'} (value: ${JSON.stringify(value)})`);
-    }
-}
+    const markExcludedBraces = (startPos) => {
+        const bracePos = fileContent.indexOf('{', startPos);
+        if (bracePos === -1) return;
 
-// Global interceptor for all string literals and number usage
-const originalConsoleLog = console.log;
-const originalConsoleWarn = console.warn;
-const checkMagicInArgs = (...args) => {
-    args.forEach((arg, i) => {
-        if (typeof arg === 'string' || typeof arg === 'number') {
-            detectMagicNumberInCode(arg, `console.arg[${i}]`);
+        let depth = 1;
+        let p = bracePos + 1;
+        while (p < fileContent.length && depth > 0) {
+            if (fileContent[p] === '{') depth++;
+            if (fileContent[p] === '}') depth--;
+            p++;
         }
-    });
-};
 
-// Enhance regex to catch numeric patterns
-const enhancedNumberPattern = /(?<![a-zA-Z])(?:0[xX][\da-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+\.?\d*(?:[eE][+-]?\d+)?)/g;
+        const start = fileContent.slice(0, bracePos).split('\n').length;
+        const end = fileContent.slice(0, p).split('\n').length;
+        for (let line = start; line <= end; line++) {
+            excludedLines.add(line);
+        }
+    };
+
+    for (const pattern of patterns) {
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(fileContent)) !== null) {
+            const lineStart = fileContent.lastIndexOf('\n', match.index) + 1;
+            const lineEnd = fileContent.indexOf('\n', match.index);
+            const lineContent = fileContent.slice(lineStart, lineEnd === -1 ? fileContent.length : lineEnd);
+
+            if (!lineContent.trim().startsWith('//')) {
+                markExcludedBraces(match.index);
+            }
+        }
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        const lineNum = i + 1;
+        if (excludedLines.has(lineNum)) continue;
+        const line = lines[i];
+
+        let match;
+        while ((match = numericPattern.exec(line)) !== null) {
+            const value = parseFloat(match[1]);
+            const lineContext = line.trim();
+
+            if (value === -1 || value === 0 || value === 1) continue;
+            if (lineContext.startsWith('//')) continue;
+            if (lineContext.match(/\[\s*\d+\s*\]|\.substring\(|\.slice\(/)) continue;
+            if (lineContext.match(/case\s+\d+:|default:/)) continue;
+            if (lineContext.match(/level:\s*\d+|depth:\s*\d+/)) continue;
+            if (lineContext.match(/\/\s*\d+|%\s*\d+|Math\.(pow|floor|ceil|round)\(/)) continue;
+            if (lineContext.match(/\.toFixed\(|\.toPrecision\(|\.toExponential\(/)) continue;
+            if (lineContext.match(/length\s*[<>=!]+\s*\d+|\d+\s*[<>=!]+\s*length/)) continue;
+            if (lineContext.match(/\/\[[\d\-]*\d+[\d\-]*\]/)) continue;
+            if (lineContext.match(/[+\-*/%]=?\s*\d+(?![.])/)) continue;
+
+            const domainPatterns = [
+                /timeout|interval|delay|wait|duration|debounce|throttle/i,
+                /threshold|limit|max|min|bound|capacity/i,
+                /size|count|length|width|height|scale/i,
+                /retry|attempt|repetition/i,
+                /%\s*\d+/
+            ];
+
+            if (domainPatterns.some(p => p.test(lineContext))) {
+                findings.push({
+                    line: lineNum,
+                    value,
+                    context: lineContext.substring(0, 80)
+                });
+            }
+        }
+    }
+
+    if (findings.length > 0) {
+        console.log('\n[SCAN] Found potential configurable values:');
+        for (const f of findings.slice(0, CONFIG.reporting.maxDisplayResults)) {
+            console.log(`  Line ${f.line}: ${f.value} in "${f.context}"`);
+        }
+        if (findings.length > CONFIG.reporting.maxDisplayResults) {
+            console.log(`  ... and ${findings.length - CONFIG.reporting.maxDisplayResults} more`);
+        }
+    }
+
+    return findings;
+}
 
 // Resource pools for managing system resources
 const ResourcePools = {
@@ -3715,7 +3801,7 @@ function validateConfig() {
 
 // EventStore - pure data storage
 class EventStore {
-    constructor(maxEvents = 10000, maxMaps = 1000) {
+    constructor(maxEvents = CONFIG.storage.maxEventCapacity, maxMaps = CONFIG.storage.maxMapCapacity) {
         this.events = [];
         this.errors = new Map();
         this.causality = new Map();
@@ -5452,7 +5538,7 @@ class ProcessingCoordinator {
     }
     
     // Borrow resource temporarily
-    borrow(borrower, resource, duration = 1000) {
+    borrow(borrower, resource, duration = CONFIG.resources.defaultBorrowDuration) {
         this.borrowed.set(resource, {
             owner: borrower,
             returnBy: Date.now() + duration
@@ -5674,7 +5760,7 @@ class ProcessingCoordinator {
         return {
             access: 'deferred',
             retry: () => this.acquire(requester, resource, mode),
-            estimatedWait: 100
+            estimatedWait: CONFIG.resources.defaultWaitEstimate
         };
     }
     
@@ -6423,7 +6509,7 @@ class DocumentProcessor {
         if (nextLine && line.trim()) {
             if (CONFIG.patterns.setextPrimary.test(nextLine.trim()) && nextLine.trim().length >= CONFIG.processor.minGroupSize) {
                 return {
-                    level: CONFIG.processor.topLevelSection,
+                    level: 1,
                     content: line.trim(),
                     skip: true
                 };
@@ -7751,8 +7837,8 @@ class HTMLModality {
     buildResetStyles(context) {
         return new Lazy(() => new LazyTemplate([
             '* {\n',
-            '    margin: ', CONFIG.ui.zero, ';\n',
-            '    padding: ', CONFIG.ui.zero, ';\n',
+            '    margin: 0;\n',
+            '    padding: 0;\n',
             '    box-sizing: ', CONFIG.css.boxModel.border, ';\n',
             '}\n\n'
         ]));
@@ -7782,7 +7868,7 @@ class HTMLModality {
             '    border-right: ', CONFIG.ui.borderWidth, 'px solid var(--border);\n',
             '    position: ', CONFIG.css.position.fixed, ';\n',
             '    top: 0;\n',
-            '    left: ', CONFIG.ui.zero, ';\n',
+            '    left: 0;\n',
             '    height: ', THRESHOLDS.VIEWPORT_HEIGHT, 'vh;\n',
             '    overflow-y: auto;\n',
             '    padding: ', CONFIG.ui.typography.scale.base, 'rem;\n',
@@ -7867,7 +7953,7 @@ class HTMLModality {
             '        transform: ', CONFIG.ui.transform.none, ';\n',
             '    }\n',
             '    .content {\n',
-            '        margin-left: ', CONFIG.ui.zero, ';\n',
+            '        margin-left: 0;\n',
             '    }\n',
             '}\n\n'
         ]));
@@ -7884,7 +7970,7 @@ class HTMLModality {
             '        page-break-after: always;\n',
             '    }\n',
             '    .content {\n',
-            '        margin-left: ', CONFIG.ui.zero, ';\n',
+            '        margin-left: 0;\n',
             '    }\n',
             '    .anchor-link {\n',
             '        display: ', CONFIG.css.display.none, ';\n',
@@ -8060,7 +8146,7 @@ class PDFModality extends HTMLModality {
             text-decoration: ${CONFIG.css.textDecoration.underline};
         }
         
-        .toc-level-0 { margin-left: ${CONFIG.ui.zero}; font-weight: ${CONFIG.ui.typography.weight.bold}; }
+        .toc-level-0 { margin-left: 0; font-weight: ${CONFIG.ui.typography.weight.bold}; }
         .toc-level-1 { margin-left: ${CONFIG.print.spacing.indent}em; }
         .toc-level-2 { margin-left: ${CONFIG.ui.spacing.tiny}em; }
         
@@ -9275,7 +9361,7 @@ async function watch() {
     // Wait for initial builds to complete (with timeout)
     const maxWaitTime = CONFIG.scheduler.initialBuildWaitMax;
     const startWait = Date.now();
-    while (scheduler.running.size > CONFIG.processor.emptyCheckThreshold || scheduler.queue.length > CONFIG.processor.emptyCheckThreshold) {
+    while (scheduler.running.size > 0 || scheduler.queue.length > 0) {
         if (Date.now() - startWait > maxWaitTime) {
             console.warn(CONFIG.strings.warningPrefix + ' Initial builds taking too long, continuing anyway');
             break;
@@ -9375,7 +9461,7 @@ async function watch() {
     // Log scheduler stats periodically (store interval ID for cleanup)
     const statsInterval = setInterval(() => {
         const stats = scheduler.getStats();
-        if (stats.running > CONFIG.processor.emptyCheckThreshold || stats.queued > CONFIG.processor.emptyCheckThreshold) {
+        if (stats.running > 0 || stats.queued > 0) {
         }
     }, TIME.TIMEOUT);
     
