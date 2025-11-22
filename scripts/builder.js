@@ -5,182 +5,25 @@ import puppeteer from 'puppeteer';
 import crypto from 'crypto';
 import { performance } from 'perf_hooks';
 import { execSync } from 'child_process';
-import net from 'net';
-import zlib from 'zlib';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
-// Forward declarations 
-let causalDebugger;
+// Forward declarations
+let traceOrchestrator;
 let configPatternValidator;
 let processingCoordinator;
-let proofSystem;
-let linearTypes;
-
-const proofTrace = new Map();
-
-// Trace computations with their provenance
-const recordComputation = (value, functor, inputs) => {
-    const key = makeTraceKey(value);
-    if (key !== null) {
-        proofTrace.set(key, {
-            value,
-            functor,
-            inputs,
-            timestamp: Date.now(),
-            type: typeof value
-        });
-    }
-    return value;
-};
-
-// Generate stable key for tracing
-const makeTraceKey = (value) => {
-    if (typeof value === 'number' && isFinite(value)) return value;
-    if (typeof value === 'string') return `str:${value}`;
-    if (typeof value === 'boolean') return `bool:${value}`;
-    if (Array.isArray(value)) return `arr:${JSON.stringify(value)}`;
-    if (value && typeof value === 'object' && value.constructor === Object) {
-        return `obj:${JSON.stringify(value)}`;
-    }
-    return null;
-};
-
-const traced = (name, fn) => {
-    return (...args) => {
-        const result = fn(...args);
-        const key = makeTraceKey(result);
-        if (key !== null) {
-            proofTrace.set(key, {
-                value: result,
-                functor: name,
-                inputs: args,
-                timestamp: Date.now(),
-                type: typeof result
-            });
-        }
-        return result;
-    };
-};
-
-// PROOF SYSTEM
-
-class ProofSystem {
-    constructor() {
-        // The existing proofTrace is our proof store
-        this.proofs = proofTrace;
-        
-        // Type universe hierarchy - will be lazy when Lazy exists
-        this._universes = null;
-        
-        // Tactics are generalized from our traced() functions
-        this.tactics = new Map();
-        this.registerCoreTactics();
-    }
-    
-    // Initialize lazy universes after Lazy class is defined
-    initializeUniverses(Lazy, zero, one, two, three) {
-        this._universes = new Lazy(() => ({
-            Prop: zero,     // Propositions 
-            Config: one,    // Configuration values
-            Build: two,     // Build processes
-            Meta: three     // Meta-level
-        }));
-    }
-    
-    get universes() {
-        return this._universes ? this._universes.value : {};
-    }
-    
-    prove(value, tactic, premises) {
-        return recordComputation(value, tactic, premises);
-    }
-    
-    createTactic(name, fn) {
-        return traced(name, fn);
-    }
-    
-    hasProof(value) {
-        const key = makeTraceKey(value);
-        return key !== null && this.proofs.has(key);
-    }
-
-    getProof(value) {
-        const key = makeTraceKey(value);
-        return key !== null ? this.proofs.get(key) : undefined;
-    }
-
-    createObligation(spec) {
-        const key = `obligation:${spec.proposition}`;
-        proofTrace.set(key, {
-            value: spec,
-            functor: 'OBLIGATION',
-            inputs: [spec.context],
-            timestamp: Date.now(),
-            type: 'obligation'
-        });
-        return spec;
-    }
-    
-    registerCoreTactics() {
-        // Core tactics registered after system initialization
-    }
-
-    // Register an inductive type
-    registerType(inductiveType) {
-        (this.types ||= new Map()).set(inductiveType.name, inductiveType);
-    }
-
-    // Validate all traced computations lazily
-    validateAll() {
-        const unproven = [];
-        for (const [key, trace] of this.proofs) {
-            if (trace.type === 'obligation') {
-                unproven.push({ key, trace });
-            }
-        }
-        return unproven;
-    }
-
-    // Generate missing proofs for obligations
-    proveObligation(obligation) {
-        const tactic = this.tactics.get(obligation.functor) || TACTICS.auto;
-        if (tactic && tactic.apply) {
-            const state = { goal: obligation.value, context: obligation.inputs };
-            return tactic.apply(state);
-        }
-        return null;
-    }
-}
-
-
-// Lazy TypeChecker - will be initialized after Lazy class is defined
 let lazyTypeChecker;
-
-// Lazy ProofTracer - will be initialized after Lazy class is defined
-let lazyProofTracer;
+let typeChecker;
 
 
-// Global instances will be created after the base classes are defined
-let typeChecker; 
-let proofTracer;
 
-// CENTRALIZED CONFIGURATION
-
-class InductiveType {
+class SumType {
     constructor(name, constructors) {
         this.name = name;
         this.constructors = constructors;
-        
-        // Generate eliminator (the induction principle)
         this.elim = this.generateEliminator();
-        
-        // Register in proof system if it exists
-        if (typeof proofSystem !== 'undefined' && proofSystem) {
-            proofSystem.registerType(this);
-        }
     }
     
     generateEliminator() {
@@ -214,10 +57,9 @@ class Lazy {
             this._cache = this._thunk();
             this._evaluated = true;
 
-            // Validate lazy-evaluated file operations
-            if (proofSystem && typeof this._cache === 'string') {
+            if (traceOrchestrator && typeof this._cache === 'string') {
                 if (this._cache.includes('/') || this._cache.includes('\\')) {
-                    proofSystem.prove(this._cache, 'LAZY_PATH', [this._thunk.name || 'anonymous']);
+                    traceOrchestrator.trace('LAZY_PATH', { path: this._cache, thunk: this._thunk.name || 'anonymous' });
                 }
             }
         }
@@ -351,7 +193,7 @@ class Pipeline {
             // Check cache first
             const cached = pullGraph.objects.get(cacheKey);
             if (cached && cached.cached && cached.value) {
-                causalDebugger.trace('PIPELINE_CACHE_HIT', { cacheKey });
+                traceOrchestrator.trace('PIPELINE_CACHE_HIT', { cacheKey });
                 return cached.value;
             }
             
@@ -361,7 +203,7 @@ class Pipeline {
             // Store in cache
             if (result) {
                 pullGraph.register(cacheKey, new Lazy(() => result));
-                causalDebugger.trace('PIPELINE_CACHE_STORE', { cacheKey });
+                traceOrchestrator.trace('PIPELINE_CACHE_STORE', { cacheKey });
             }
             
             return result;
@@ -447,13 +289,12 @@ lazyTypeChecker = new Lazy(() => {
             super(enforceStrict);
             this.typeEnvironment = new Map();
         }
-        
+
         typeCheck(term, expectedType = null) {
-            // Use existing validation logic
             this.validateStructure(term, expectedType || 'TERM');
             return this.violations.length === 0;
         }
-        
+
         checkWellFormed(value, context) {
             return !this.detectMagicNumber(value, context);
         }
@@ -461,18 +302,6 @@ lazyTypeChecker = new Lazy(() => {
     return TypeChecker;
 });
 
-lazyProofTracer = new Lazy(() => {
-    class ProofTracer extends CausalDebugger {
-        recordProofStep(rule, premises, conclusion) {
-            return this.trace(rule, { premises, conclusion });
-        }
-        
-        getProofTree(proofId) {
-            return this.getCausalChain(proofId);
-        }
-    }
-    return ProofTracer;
-});
 // Infinite lazy streams (coinductive data)
 class LazyStream {
     constructor(head, tailThunk) {
@@ -744,7 +573,7 @@ class PullGraph {
         const node = this.objects.get(nodeId);
         if (!node) {
             const error = new Error(`Unknown object: ${nodeId}`);
-            if (causalDebugger) causalDebugger.error(error, { nodeId });
+            if (traceOrchestrator) traceOrchestrator.error(error, { nodeId });
             throw error;
         }
         
@@ -752,10 +581,11 @@ class PullGraph {
             try {
                 this.pullCount++;
                 
-                // Apply permutation if coordinator exists
                 if (processingCoordinator && processingCoordinator.state.has(nodeId)) {
-                    const permuted = processingCoordinator.permute(node);
-                    node.computation = new Lazy(() => permuted);
+                    const stateData = processingCoordinator.state.get(nodeId);
+                    if (stateData) {
+                        node.computation = stateData;
+                    }
                 }
                 
                 if (this.progressCallback && this.pullCount % 100 === 0) {
@@ -766,8 +596,8 @@ class PullGraph {
                     });
                 }
                 
-                if (causalDebugger) {
-                    causalDebugger.trace('PULL_GRAPH_COMPUTE', { 
+                if (traceOrchestrator) {
+                    traceOrchestrator.trace('PULL_GRAPH_COMPUTE', { 
                         nodeId, 
                         hasDeps: this.edges.has(nodeId),
                         pullCount: node.pullCount++ 
@@ -787,8 +617,8 @@ class PullGraph {
                         const value = node.computation.value;
                         node.value = { error: null, value };
                     } catch (error) {
-                        if (causalDebugger) {
-                            causalDebugger.error(error, {
+                        if (traceOrchestrator) {
+                            traceOrchestrator.error(error, {
                                 nodeId,
                                 stage: 'computation',
                                 handled: true
@@ -817,8 +647,8 @@ class PullGraph {
                     });
                 }
             } catch (error) {
-                if (causalDebugger) {
-                    causalDebugger.error(error, { 
+                if (traceOrchestrator) {
+                    traceOrchestrator.error(error, { 
                         nodeId, 
                         stage: 'pull',
                         fatal: !this.errorBoundaries.has(nodeId) 
@@ -883,65 +713,46 @@ class PullPromise {
     }
 }
 
-// Pull-based event emitter (events only process when pulled)
-class PullEmitter {
-    constructor() {
-        this.events = new Map();
-        this.handlers = new Map();
-    }
-    
-    emit(event, data) {
-        if (!this.events.has(event)) {
-            this.events.set(event, []);
-        }
-        // Store event but don't process yet
-        this.events.get(event).push({
-            data,
-            timestamp: Date.now(),
-            processed: false
-        });
-    }
-    
-    on(event, handler) {
-        if (!this.handlers.has(event)) {
-            this.handlers.set(event, []);
-        }
-        this.handlers.get(event).push(handler);
-    }
-    
-    // Pull all pending events for processing
-    pullEvents(event) {
-        const pending = Maybe.elim(
-            () => 'Maybe',
-            () => [],
-            p => p
-        )(this.events.get(event));
-        const handlers = Maybe.elim(
-            () => 'Maybe',
-            () => [],
-            h => h
-        )(this.handlers.get(event));
-        
-        const results = [];
-        for (const evt of pending) {
-            if (!evt.processed) {
-                for (const handler of handlers) {
-                    results.push(handler(evt.data));
-                }
-                evt.processed = true;
-            }
-        }
-        return results;
-    }
-}
-
 // Pull-based cache that only computes when accessed
 class PullCache {
     constructor(generator) {
         this.cache = new Map();
         this.generator = generator;
+
+        // Integrated cache pipelines using Kleisli composition
+        this.warm = Pipeline.kleisli(
+            keys => new Lazy(() => {
+                traceOrchestrator.trace('CACHE_WARM_START', { count: keys.length });
+                return keys;
+            }),
+            keys => new PullPromise(async () => {
+                const results = await Promise.all(
+                    keys.map(key => this.get(key))
+                );
+                return { keys, results };
+            }),
+            warmed => new Lazy(() => {
+                traceOrchestrator.trace('CACHE_WARM_COMPLETE', { count: warmed.keys.length });
+                return warmed;
+            })
+        );
+
+        this.invalidate = Pipeline.kleisli(
+            pattern => new Lazy(() => {
+                const keys = Array.from(this.cache.keys()).filter(k => k.match(pattern));
+                return keys;
+            }),
+            keys => new Lazy(() => {
+                keys.forEach(k => this.cache.delete(k));
+                return keys;
+            }),
+            invalidated => new Lazy(() => {
+                lazyEvents.emit({ type: 'CACHE_INVALIDATED', count: invalidated.length });
+                return invalidated;
+            })
+        );
     }
-    
+
     get(key) {
         if (!this.cache.has(key)) {
             // Pull computation only when needed
@@ -950,7 +761,7 @@ class PullCache {
         }
         return this.cache.get(key).value;
     }
-    
+
     has(key) {
         if (!this.cache.has(key)) return false;
         const lazy = this.cache.get(key);
@@ -1020,7 +831,7 @@ class LazyFS {
     // Read file lazily - integrates with our parse() pipeline
     read(path) {
         return new Lazy(() => {
-            causalDebugger.trace('FS_READ', { path });
+            traceOrchestrator.trace('FS_READ', { path });
             return this.readCache.get(path);
         });
     }
@@ -1028,7 +839,7 @@ class LazyFS {
     // Write file lazily - respects linear types for resource safety
     write(path, content) {
         return new PullPromise(async () => {
-            causalDebugger.trace('FS_WRITE', { path });
+            traceOrchestrator.trace('FS_WRITE', { path });
 
             // Handle LazyTemplate specially
             if (content instanceof LazyTemplate) {
@@ -1084,7 +895,7 @@ class LazyFS {
                 });
                 
                 watcher.on('error', (err) => {
-                    causalDebugger.error(err, { path });
+                    traceOrchestrator.error(err, { path });
                 });
                 
                 return next;
@@ -1120,7 +931,7 @@ class LazyFS {
     // Create directory lazily with proper error handling
     mkdir(path, options = { recursive: true }) {
         return new PullPromise(async () => {
-            causalDebugger.trace('FS_MKDIR', { path, options });
+            traceOrchestrator.trace('FS_MKDIR', { path, options });
             await fs.promises.mkdir(path, options);
             return path;
         });
@@ -1129,7 +940,7 @@ class LazyFS {
     // Remove file lazily
     unlink(path) {
         return new PullPromise(async () => {
-            causalDebugger.trace('FS_UNLINK', { path });
+            traceOrchestrator.trace('FS_UNLINK', { path });
             
             // Linear type: consume delete token
             const deleteToken = { resource: 'delete', path };
@@ -1154,7 +965,7 @@ class LazyFS {
     // Copy file lazily with verification
     copy(src, dest) {
         return new PullPromise(async () => {
-            causalDebugger.trace('FS_COPY', { src, dest });
+            traceOrchestrator.trace('FS_COPY', { src, dest });
             
             // Read source lazily
             const content = await this.pull(this.read(src));
@@ -1194,26 +1005,30 @@ class LazyEventSystem {
         // Root event stream - infinite lazy stream of all events
         this.rootStream = null;
         this.currentTail = null;
-        
+
+        // Track processed events for linear consume-once semantics
+        this.eventStore = new Map(); // event type -> [{data, timestamp, processed}]
+        this.handlers = new Map(); // event type -> [handler functions]
+
         // Initialize with empty stream
-        this.events = fix(stream => 
+        this.events = fix(stream =>
             new LazyStream(null, () => this.currentTail || stream)
         );
-        
+
         // Telemetry stream - enriched events
-        this.telemetry = new Lazy(() => 
+        this.telemetry = new Lazy(() =>
             this.events
                 .map(e => this.enrichWithMetrics(e))
                 .filter(e => e && e.significant)
         );
-        
+
         // Error stream - filtered for errors
         this.errors = new Lazy(() =>
             this.events
                 .filter(e => e && (e.type === 'error' || e.level === 'error'))
                 .map(e => this.analyzeError(e))
         );
-        
+
         // Performance stream - timing events
         this.performance = new Lazy(() =>
             this.events
@@ -1223,14 +1038,14 @@ class LazyEventSystem {
                     percentile: this.calculatePercentile(e.duration)
                 }))
         );
-        
+
         // Causality stream - events with causal links
         this.causality = new Lazy(() =>
             this.events
                 .filter(e => e && e.causes)
                 .map(e => this.buildCausalChain(e))
         );
-        
+
         // Resource usage stream
         this.resources = new Lazy(() =>
             this.events
@@ -1240,7 +1055,7 @@ class LazyEventSystem {
                     available: processingCoordinator.getResourceAvailability(e.resource)
                 }))
         );
-        
+
         // Validation violations stream
         this.violations = new Lazy(() =>
             this.events
@@ -1252,18 +1067,29 @@ class LazyEventSystem {
         );
     }
     
-    // Emit event - adds to the infinite stream
+    // Emit event - adds to the infinite stream and stores for consume-once semantics
     emit(event) {
         const enrichedEvent = {
             ...event,
             timestamp: Date.now(),
             id: crypto.randomBytes(CONFIG.processor.hashLength).toString(CONFIG.strings.hashEncoding),
-            context: causalDebugger.currentContext
+            context: traceOrchestrator.currentContext
         };
-        
+
+        // Store event with processed flag for linear consume-once semantics
+        const eventType = event.type || 'default';
+        if (!this.eventStore.has(eventType)) {
+            this.eventStore.set(eventType, []);
+        }
+        this.eventStore.get(eventType).push({
+            data: enrichedEvent,
+            timestamp: enrichedEvent.timestamp,
+            processed: false
+        });
+
         // Create new tail for the stream
         const newTail = new LazyStream(enrichedEvent, () => this.currentTail);
-        
+
         // Update current tail
         if (!this.currentTail) {
             this.currentTail = newTail;
@@ -1273,11 +1099,44 @@ class LazyEventSystem {
             const oldTail = this.currentTail;
             this.currentTail = new LazyStream(enrichedEvent, () => oldTail);
         }
-        
+
         // Trace emission
-        causalDebugger.trace('EVENT_EMIT', enrichedEvent);
-        
+        traceOrchestrator.trace('EVENT_EMIT', enrichedEvent);
+
         return enrichedEvent;
+    }
+
+    // Register handler for event type
+    on(eventType, handler) {
+        if (!this.handlers.has(eventType)) {
+            this.handlers.set(eventType, []);
+        }
+        this.handlers.get(eventType).push(handler);
+    }
+
+    // Pull all pending events for processing (consume-once semantics)
+    pullEvents(eventType) {
+        const pending = Maybe.elim(
+            () => 'Maybe',
+            () => [],
+            p => p
+        )(this.eventStore.get(eventType));
+        const handlers = Maybe.elim(
+            () => 'Maybe',
+            () => [],
+            h => h
+        )(this.handlers.get(eventType));
+
+        const results = [];
+        for (const evt of pending) {
+            if (!evt.processed) {
+                for (const handler of handlers) {
+                    results.push(handler(evt.data));
+                }
+                evt.processed = true;
+            }
+        }
+        return results;
     }
     
     // Pull n events from stream
@@ -1373,7 +1232,7 @@ class LazyEventSystem {
         return {
             ...event,
             stack: event.error?.stack,
-            causality: causalDebugger.getCausalChain(event.id),
+            causality: traceOrchestrator.getCausalChain(event.id),
             impact: this.assessImpact(event),
             suggestions: this.generateSuggestions(event)
         };
@@ -1396,47 +1255,137 @@ class LazyEventSystem {
         };
     }
     
-    // Helper methods
+    // Helper methods - delegating to TraceOrchestrator for validation
     isSignificant(event) {
-        return event.level === 'error' || 
-               event.duration > TIME.LONG || 
-               event.memory?.heapUsed > LIMITS.MEMORY_THRESHOLD;
+        if (!traceOrchestrator) {
+            return event.level === 'error' ||
+                   event.duration > TIME.LONG ||
+                   event.memory?.heapUsed > LIMITS.MEMORY_THRESHOLD;
+        }
+
+        // Use TraceOrchestrator metrics for significance assessment
+        const metrics = traceOrchestrator.getMetrics();
+        const bottlenecks = traceOrchestrator.identifyBottlenecks();
+
+        return event.level === 'error' ||
+               bottlenecks.some(b => b.operation === event.type) ||
+               metrics.memoryPressure > CONFIG.ui.opacity.strong;
     }
-    
+
     assessImpact(event) {
-        if (event.type === 'error') return 'high';
-        if (event.duration > TIME.TIMEOUT) return 'medium';
+        if (!traceOrchestrator) {
+            if (event.type === 'error') return 'high';
+            if (event.duration > TIME.TIMEOUT) return 'medium';
+            return 'low';
+        }
+
+        // Use TraceOrchestrator pattern detection for impact assessment
+        const patterns = traceOrchestrator.detectPatterns();
+
+        if (event.type === 'error' || patterns.errorClusters.some(cluster =>
+            cluster.some(e => e.id === event.id))) {
+            return 'high';
+        }
+
+        const bottlenecks = traceOrchestrator.identifyBottlenecks();
+        if (bottlenecks.some(b => b.operation === event.type)) {
+            return 'medium';
+        }
+
         return 'low';
     }
-    
+
     generateSuggestions(event) {
         const suggestions = [];
-        
-        if (event.error?.code === 'ENOENT') {
+
+        // Use ERROR_SCHEMA pattern matching
+        const errorCode = event.error?.code;
+        const errorMsg = event.error?.message;
+
+        if (ERROR_SCHEMA.fileNotFound.pattern.test(errorCode) ||
+            ERROR_SCHEMA.fileNotFound.pattern.test(errorMsg)) {
             suggestions.push('Check file path exists');
         }
-        if (event.duration > TIME.VERY_LONG) {
-            suggestions.push('Consider async processing');
+
+        if (ERROR_SCHEMA.operationTimeout.pattern.test(errorMsg)) {
+            suggestions.push('Operation timed out - check network or increase timeout');
         }
-        if (event.memory?.heapUsed > LIMITS.MEMORY_THRESHOLD) {
-            suggestions.push('Memory usage high - consider optimization');
+
+        if (ERROR_SCHEMA.resourceClosed.pattern.test(errorMsg)) {
+            suggestions.push('Resource was closed - check lifecycle management');
         }
-        
+
+        if (!traceOrchestrator) {
+            if (event.duration > TIME.VERY_LONG) {
+                suggestions.push('Consider async processing');
+            }
+            if (event.memory?.heapUsed > LIMITS.MEMORY_THRESHOLD) {
+                suggestions.push('Memory usage high - consider optimization');
+            }
+        } else {
+            // Use TraceOrchestrator bottleneck detection
+            const bottlenecks = traceOrchestrator.identifyBottlenecks();
+            if (bottlenecks.some(b => b.operation === event.type && b.avgDuration > TIME.VERY_LONG)) {
+                suggestions.push('Consider async processing - detected performance bottleneck');
+            }
+
+            // Use TraceOrchestrator memory pressure calculation
+            const metrics = traceOrchestrator.getMetrics();
+            if (metrics.memoryPressure > CONFIG.ui.opacity.strong) {
+                suggestions.push('Memory pressure detected - consider optimization');
+            }
+
+            // Use pattern detection for memory leaks
+            const patterns = traceOrchestrator.detectPatterns();
+            if (patterns.memoryLeaks) {
+                suggestions.push('Potential memory leak detected - review resource cleanup');
+            }
+        }
+
         return suggestions;
     }
-    
+
     calculatePercentile(duration) {
-        // Simple percentile calculation
-        if (duration < TIME.TICK) return 50;
-        if (duration < TIME.SECOND) return 70;
-        if (duration < TIME.TIMEOUT) return 90;
-        return 95;
+        if (!traceOrchestrator) {
+            // Fallback to simple percentile calculation
+            if (duration < TIME.TICK) return 50;
+            if (duration < TIME.SECOND) return 70;
+            if (duration < TIME.TIMEOUT) return 90;
+            return 95;
+        }
+
+        // Use TraceOrchestrator performance profile for accurate percentiles
+        const profile = traceOrchestrator.getPerformanceProfile();
+        const allDurations = Object.values(profile).map(p => p.avg);
+
+        if (allDurations.length === 0) {
+            if (duration < TIME.TICK) return 50;
+            if (duration < TIME.SECOND) return 70;
+            if (duration < TIME.TIMEOUT) return 90;
+            return 95;
+        }
+
+        allDurations.sort((a, b) => a - b);
+        const index = allDurations.findIndex(d => d >= duration);
+        if (index === -1) return 99;
+
+        return Math.floor((index / allDurations.length) * 100);
     }
-    
+
     assessViolationSeverity(event) {
-        if (event.violation.includes('MAGIC_NUMBER')) return 'high';
-        if (event.violation.includes('CONFIG')) return 'medium';
-        return 'low';
+        if (!traceOrchestrator || !traceOrchestrator.invariantChecker) {
+            // Fallback using SEVERITY_SCHEMA
+            for (const [level, schema] of Object.entries(SEVERITY_SCHEMA)) {
+                if (schema.values.some(pattern => event.violation.includes(pattern))) {
+                    return level;
+                }
+            }
+            return 'low';
+        }
+
+        // Use InvariantChecker severity classification
+        const severity = traceOrchestrator.invariantChecker.classifySeverity(event.violation);
+        return severity || 'low';
     }
     
     findEvent(id) {
@@ -1456,58 +1405,20 @@ class LazyEventSystem {
 // Create global lazy event system
 const lazyEvents = new LazyEventSystem();
 
-
-// Cache Management Pipelines
-const cachePipelines = {
-    // Cache warming pipeline
-    warm: Pipeline.kleisli(
-        keys => new Lazy(() => {
-            causalDebugger.trace('CACHE_WARM_START', { count: keys.length });
-            return keys;
-        }),
-        keys => new PullPromise(async () => {
-            const results = await Promise.all(
-                keys.map(key => pullCache.get(key))
-            );
-            return { keys, results };
-        }),
-        warmed => new Lazy(() => {
-            causalDebugger.trace('CACHE_WARM_COMPLETE', { count: warmed.keys.length });
-            return warmed;
-        })
-    ),
-    
-    // Cache invalidation pipeline
-    invalidate: Pipeline.kleisli(
-        pattern => new Lazy(() => {
-            const keys = Array.from(pullCache.cache.keys()).filter(k => k.match(pattern));
-            return keys;
-        }),
-        keys => new Lazy(() => {
-            keys.forEach(k => pullCache.cache.delete(k));
-            return keys;
-        }),
-        invalidated => new Lazy(() => {
-            lazyEvents.emit({ type: 'CACHE_INVALIDATED', count: invalidated.length });
-            return invalidated;
-        })
-    )
-};
-
 // Lazy Git System - version control as lazy computations
 class LazyGit {
     constructor() {
         // Dependency graph for git operations
         this.operations = new PullGraph();
-        
+
         // Cache for git state
         this.statusCache = new PullCache(() => this._fetchStatus());
         this.diffCache = new PullCache((ref) => this._fetchDiff(ref));
         this.logCache = new PullCache((n) => this._fetchLog(n));
-        
+
         // History as lazy stream
         this.history = new LazyStream(null, () => this._nextCommit());
-        
+
         // Lazy pull helper - avoids early unwrapping
         this.pull = async (lazyValue) => {
             if (lazyValue instanceof PullPromise) {
@@ -1522,11 +1433,11 @@ class LazyGit {
             }
             return lazyValue;
         };
-        
+
         // Changes as event stream
         this.changes = new LazyStream(null, null);
     }
-    
+
     // Get status lazily
     status() {
         return new Lazy(() => {
@@ -1548,7 +1459,7 @@ class LazyGit {
             }
         });
     }
-    
+
     // Get diff lazily
     diff(ref = 'HEAD') {
         return new Lazy(() => {
@@ -1556,7 +1467,7 @@ class LazyGit {
             return this.diffCache.get(ref);
         });
     }
-    
+
     // Get log lazily
     log(n = 10) {
         return new Lazy(() => {
@@ -1564,12 +1475,12 @@ class LazyGit {
             return this.logCache.get(n);
         });
     }
-    
+
     // Stage files lazily
     stage(files) {
         return new PullPromise(async () => {
             lazyEvents.emit({ type: 'git', action: 'stage', files });
-            
+
             // Linear type: acquire staging lock
             const stageToken = { resource: 'git-stage', scope: 'global' };
             if (processingCoordinator.consumed.has(stageToken)) {
@@ -1577,7 +1488,7 @@ class LazyGit {
             }
             processingCoordinator.consumed.add(stageToken);
             processingCoordinator.linearResources.add('git-stage:global');
-            
+
             try {
                 const results = [];
                 for (const file of files) {
@@ -1590,22 +1501,22 @@ class LazyGit {
                         results.push({ file, result });
                     }
                 }
-                
+
                 // Invalidate status cache
                 this.statusCache.cache.clear();
-                
+
                 return results;
             } finally {
                 processingCoordinator.releaseResource('git-stage', 'global');
             }
         });
     }
-    
+
     // Create commit lazily with empty message (as per requirements)
     commit(options = {}) {
         return new PullPromise(async () => {
             lazyEvents.emit({ type: 'git', action: 'commit', options });
-            
+
             // Linear type: acquire commit lock
             const commitToken = { resource: 'git-commit', scope: 'global' };
             if (processingCoordinator.consumed.has(commitToken)) {
@@ -1613,33 +1524,33 @@ class LazyGit {
             }
             processingCoordinator.consumed.add(commitToken);
             processingCoordinator.linearResources.add('git-commit:global');
-            
+
             try {
                 // Empty commit message as required
                 const result = execSync('git commit --allow-empty-message -m ""', {
                     encoding: CONFIG.strings.standardEncoding
                 });
-                
+
                 // Invalidate caches
                 this.statusCache.cache.clear();
                 this.logCache.cache.clear();
                 this.diffCache.cache.clear();
-                
+
                 // Add to history stream
                 this._addToHistory(result);
-                
+
                 return result;
             } finally {
                 processingCoordinator.releaseResource('git-commit', 'global');
             }
         });
     }
-    
+
     // Push lazily
     push(remote = 'origin', branch = null) {
         return new PullPromise(async () => {
             lazyEvents.emit({ type: 'git', action: 'push', remote, branch });
-            
+
             // Linear type: acquire push lock
             const pushToken = { resource: 'git-push', scope: 'global' };
             if (processingCoordinator.consumed.has(pushToken)) {
@@ -1647,20 +1558,20 @@ class LazyGit {
             }
             processingCoordinator.consumed.add(pushToken);
             processingCoordinator.linearResources.add('git-push:global');
-            
+
             try {
                 const cmd = branch ? `git push ${remote} ${branch}` : `git push ${remote}`;
                 const result = execSync(cmd, {
                     encoding: CONFIG.strings.standardEncoding
                 });
-                
+
                 return result;
             } finally {
                 processingCoordinator.releaseResource('git-push', 'global');
             }
         });
     }
-    
+
     // Compose full commit workflow lazily
     commitWorkflow(files, push = false) {
         const stagePipeline = Pipeline.compose(
@@ -1670,7 +1581,7 @@ class LazyGit {
                 return staged;
             })
         );
-        
+
         const commitPipeline = Pipeline.compose(
             () => this.commit(),
             sha => new Lazy(() => {
@@ -1678,7 +1589,7 @@ class LazyGit {
                 return sha;
             })
         );
-        
+
         const pushPipeline = push ? Pipeline.compose(
             () => this.push(),
             result => new Lazy(() => {
@@ -1686,14 +1597,14 @@ class LazyGit {
                 return result;
             })
         ) : () => new Lazy(() => 'No push');
-        
+
         return Pipeline.kleisli(
             stagePipeline,
             commitPipeline,
             pushPipeline
         )(files);
     }
-    
+
     // Branch workflow pipeline
     branchWorkflow(name, fromRef = 'HEAD') {
         return Pipeline.kleisli(
@@ -1703,7 +1614,7 @@ class LazyGit {
             () => this.stashPop()
         )();
     }
-    
+
     // Rebase workflow pipeline
     rebaseWorkflow(onto) {
         return Pipeline.kleisli(
@@ -1721,7 +1632,7 @@ class LazyGit {
             })
         )();
     }
-    
+
     // Check for uncommitted changes lazily
     hasChanges() {
         return new Lazy(() => {
@@ -1729,24 +1640,24 @@ class LazyGit {
             return status && status.trim().length > 0;
         });
     }
-    
+
     // Get changed files lazily
     changedFiles() {
         return new Lazy(() => {
             const status = this.statusCache.get('current');
             if (!status) return [];
-            
+
             return status
                 .split('\n')
                 .filter(line => line.trim())
                 .map(line => {
-                    const file = line.substring(CONFIG.git.statusPorcelainColumn).trim();
-                    const status = line.substring(0, 2).trim();
+                    const file = line.substring(GIT.statusPorcelainColumn).trim();
+                    const status = line.substring(0, GIT.statusCodeLength).trim();
                     return { file, status };
                 });
         });
     }
-    
+
     // Get current branch lazily
     currentBranch() {
         return new Lazy(() => {
@@ -1756,61 +1667,61 @@ class LazyGit {
             return result.trim();
         });
     }
-    
+
     // Create branch lazily
     createBranch(name) {
         return new PullPromise(async () => {
             lazyEvents.emit({ type: 'git', action: 'branch', name });
-            
+
             const result = execSync(`git checkout -b ${name}`, {
                 encoding: CONFIG.strings.standardEncoding
             });
-            
+
             // Invalidate caches
             this.statusCache.cache.clear();
-            
+
             return result;
         });
     }
-    
+
     // Stash changes lazily
     stash(message = null) {
         return new PullPromise(async () => {
             lazyEvents.emit({ type: 'git', action: 'stash', message });
-            
+
             const cmd = message ? `git stash push -m "${message}"` : 'git stash';
             const result = execSync(cmd, {
                 encoding: CONFIG.strings.standardEncoding
             });
-            
+
             // Invalidate status cache
             this.statusCache.cache.clear();
-            
+
             return result;
         });
     }
-    
+
     // Apply stash lazily
     stashPop() {
         return new PullPromise(async () => {
             lazyEvents.emit({ type: 'git', action: 'stash-pop' });
-            
+
             const result = execSync('git stash pop', {
                 encoding: CONFIG.strings.standardEncoding
             });
-            
+
             // Invalidate status cache
             this.statusCache.cache.clear();
-            
+
             return result;
         });
     }
-    
+
     // Reset changes lazily
     reset(mode = '--soft', ref = 'HEAD') {
         return new PullPromise(async () => {
             lazyEvents.emit({ type: 'git', action: 'reset', mode, ref });
-            
+
             // Linear type: acquire reset lock (dangerous operation)
             const resetToken = { resource: 'git-reset', scope: 'global' };
             if (processingCoordinator.consumed.has(resetToken)) {
@@ -1818,43 +1729,43 @@ class LazyGit {
             }
             processingCoordinator.consumed.add(resetToken);
             processingCoordinator.linearResources.add('git-reset:global');
-            
+
             try {
                 const result = execSync(`git reset ${mode} ${ref}`, {
                     encoding: CONFIG.strings.standardEncoding
                 });
-                
+
                 // Invalidate all caches
                 this.statusCache.cache.clear();
                 this.logCache.cache.clear();
                 this.diffCache.cache.clear();
-                
+
                 return result;
             } finally {
                 processingCoordinator.releaseResource('git-reset', 'global');
             }
         });
     }
-    
+
     // Private helper methods
     _fetchStatus() {
         return execSync(CONFIG.strings.statusCommand, {
             encoding: CONFIG.strings.standardEncoding
         });
     }
-    
+
     _fetchDiff(ref) {
         return execSync(`git diff ${ref}`, {
             encoding: CONFIG.strings.standardEncoding
         });
     }
-    
+
     _fetchLog(n) {
         return execSync(`git log --oneline -n ${n}`, {
             encoding: CONFIG.strings.standardEncoding
         });
     }
-    
+
     _nextCommit() {
         // Get next commit from history
         const log = this._fetchLog(1);
@@ -1863,13 +1774,13 @@ class LazyGit {
         }
         return null;
     }
-    
+
     _addToHistory(commit) {
         // Add commit to history stream
         const newNode = new LazyStream(commit, () => this.history);
         this.history = newNode;
     }
-    
+
     // Clear all caches
     clearCache() {
         this.statusCache.cache.clear();
@@ -1925,216 +1836,51 @@ const Vec = (elementType, length) => {
 // Natural number type
 const NatType = { contains: n => typeof n === 'number' && n >= 0 && Number.isInteger(n) };
 
-// Refinement types - values with proofs
+// refinement types - base types with predicates
 const Refinement = (baseType, predicate) => {
     return new DependentType('x', baseType, (x) => {
         if (!predicate(x)) throw new Error(`Value ${x} fails refinement`);
-        return { base: baseType, proof: predicate(x) };
+        return { base: baseType, valid: predicate(x) };
     });
 };
 
 // Validate array with expected length using Vec
 const validateVec = (arr, expectedLength, description) => {
-    if (!Array.isArray(arr)) {
+    try {
+        checkType(arr, ArrayType);
+    } catch {
         throw new Error(`${description}: expected array, got ${typeof arr}`);
     }
     if (arr.length !== expectedLength) {
         throw new Error(`${description}: expected length ${expectedLength}, got ${arr.length}`);
     }
-    if (proofSystem) {
-        proofSystem.prove(arr, 'VEC_VALID', [expectedLength, description]);
+    if (traceOrchestrator) {
+        traceOrchestrator.trace('VEC_VALID', { length: expectedLength, description, actualLength: arr.length });
     }
     return arr;
 };
 
 // TACTICS
 
-class Tactic {
-    constructor(name, apply) {
-        this.name = name;
-        this.apply = apply;
-    }
-    
-    // Chain tactics sequentially
-    then(nextTactic) {
-        return new Tactic(
-            `${this.name};${nextTactic.name}`,
-            (state) => nextTactic.apply(this.apply(state))
-        );
-    }
-    
-    // Try this tactic, fall back to other if fails
-    orElse(other) {
-        return new Tactic(
-            `${this.name}|${other.name}`,
-            (state) => {
-                try {
-                    return this.apply(state);
-                } catch {
-                    return other.apply(state);
-                }
-            }
-        );
-    }
-    
-    // Repeat until failure
-    repeat() {
-        return new Tactic(
-            `repeat(${this.name})`,
-            (state) => {
-                let current = state;
-                while (true) {
-                    try {
-                        current = this.apply(current);
-                    } catch {
-                        return current;
-                    }
-                }
-            }
-        );
-    }
-}
-
-// Core tactics
-const TACTICS = {
-    // Identity tactic - does nothing
-    id: new Tactic('id', (state) => state),
-    
-    // Simplify using computation
-    compute: new Tactic('compute', (state) => {
-        if (state.goal && typeof state.goal === 'number') {
-            const proof = proofSystem.getProof(state.goal);
-            if (proof) {
-                return { ...state, goal: null, proof };
-            }
-        }
-        return state;
-    }),
-    
-    // Apply a lemma
-    apply: (lemma) => new Tactic(`apply(${lemma.name || 'lemma'})`, (state) => {
-        // Apply lemma to current goal
-        return { ...state, subgoals: lemma.premises || [] };
-    }),
-    
-    // Introduce a variable
-    intro: new Tactic('intro', (state) => {
-        if (state.goal instanceof DependentType) {
-            const var_name = `x${state.context.length}`;
-            return {
-                ...state,
-                context: [...state.context, var_name],
-                goal: state.goal.bodyType
-            };
-        }
-        return state;
-    }),
-    
-    // Use induction
-    induction: (var_name) => new Tactic(`induction(${var_name})`, (state) => {
-        const type = state.context.find(v => v.name === var_name)?.type;
-        if (type instanceof InductiveType) {
-            return {
-                ...state,
-                subgoals: type.constructors.map(c => ({
-                    constructor: c,
-                    goal: state.goal
-                }))
-            };
-        }
-        return state;
-    }),
-    
-    // Auto tactic - try everything
-    auto: new Tactic('auto', function autoApply(state) {
-        const tactics = [
-            TACTICS.compute,
-            TACTICS.intro,
-            TACTICS.id
-        ];
-        
-        for (const tactic of tactics) {
-            try {
-                const newState = tactic.apply(state);
-                if (!newState.goal) return newState;
-                if (newState !== state) {
-                    // Made progress, recurse
-                    return autoApply(newState);
-                }
-            } catch {
-                continue;
-            }
-        }
-        return state;
-    })
-};
 
 // EXTRACTION
 
-class Extractor {
+// serialize runtime objects to plain data for debugging/telemetry
+class StateSerializer {
     constructor() {
-        this.extractors = new Map();
-        this.registerDefaultExtractors();
-    }
-    
-    registerDefaultExtractors() {
-        // Extract natural numbers
-        this.extractors.set('Nat', (proof) => {
-            if (proof.constructor === 'zero') return 0;
-            if (proof.constructor === 'succ') return 1 + this.extract(proof.pred);
-            return proof;
-        });
-        
-        // Extract functions
-        this.extractors.set('Function', (proof) => {
-            return (...args) => this.extract(proof.apply(...args));
-        });
-        
-        // Extract lazy values
-        this.extractors.set('Lazy', (proof) => {
-            return proof instanceof Lazy ? proof.value : proof;
-        });
-    }
-    
-    // Extract computational content from proof
-    extract(proof) {
-        // Get the type of the proof
-        const type = this.inferType(proof);
-        
-        // Use appropriate extractor
-        for (const [typeName, extractor] of this.extractors) {
-            if (type === typeName || (type && type.name === typeName)) {
-                return extractor(proof);
-            }
-        }
-        
-        // Default: return as-is
-        return proof;
-    }
-    
-    inferType(proof) {
-        if (typeof proof === 'number') return 'Nat';
-        if (typeof proof === 'function') return 'Function';
-        if (proof instanceof Lazy) return 'Lazy';
-        if (proof && proof.type) return proof.type;
-        return 'Unknown';
-    }
-    
-    // Generate optimized JavaScript from proof
-    compile(proof) {
-        const extracted = this.extract(proof);
-
-        // Generate code string
-        if (typeof extracted === 'function') {
-            return extracted.toString();
-        }
-
-        return `() => ${JSON.stringify(extracted)}`;
+        this.serializers = new Map();
     }
 
-    // Register custom extractor
-    register(name, fn) {
-        this.extractors.set(name, fn);
+    // serialize object using registered serializer
+    serialize(typeName, obj) {
+        const serializer = this.serializers.get(typeName);
+        if (!serializer) return obj;
+        return serializer(obj);
+    }
+
+    // register serializer for object type
+    register(typeName, serializerFn) {
+        this.serializers.set(typeName, serializerFn);
     }
 }
 
@@ -2145,17 +1891,19 @@ class Reflection {
         this.mirror = new Map();
     }
     
-    // Reflect a value into the type system
+    // reflect value with type information
     reflect(value) {
-        if (typeof value === 'number') {
-            return { type: 'Nat', value, proof: proofSystem.getProof(value) };
-        }
-        
+        try {
+            checkType(value, NumberType);
+            const event = traceOrchestrator.events.find(e => e.context.value === value);
+            return { type: 'Nat', value, event };
+        } catch {}
+
         if (typeof value === 'function') {
             return { type: 'Function', value, source: value.toString() };
         }
-        
-        if (value instanceof InductiveType) {
+
+        if (value instanceof SumType) {
             return {
                 type: 'Type',
                 value,
@@ -2163,7 +1911,7 @@ class Reflection {
                 eliminator: value.elim
             };
         }
-        
+
         return { type: 'Unknown', value };
     }
     
@@ -2181,39 +1929,12 @@ class Reflection {
         }
     }
     
-    // Quote code as data
-    quote(code) {
+    // introspect trace orchestrator state
+    introspect(trace) {
         return {
-            type: 'Code',
-            ast: code.toString(),
-            bindings: this.captureBindings()
-        };
-    }
-    
-    // Splice data back as code
-    splice(quoted) {
-        const fn = new Function(...Object.keys(quoted.bindings), quoted.ast);
-        return fn(...Object.values(quoted.bindings));
-    }
-    
-    captureBindings() {
-        // Capture current scope
-        return {
-            N,
-            PRIMES,
-            COMMON,
-            proofSystem
-        };
-    }
-
-    // Introspect a proof system's state
-    introspect(ps) {
-        return {
-            proofs: ps.proofs.size,
-            universes: Array.from(ps.universes.keys()),
-            unproven: Array.from(proofTrace.keys())
-                .filter(v => !ps.hasProof(v))
-                .slice(0, 10)
+            events: trace.events.length,
+            violations: trace.runtimeViolations ? trace.runtimeViolations.size : 0,
+            metrics: trace.metricsCalculator ? Object.keys(trace.metricsCalculator.getMetrics()).length : 0
         };
     }
 }
@@ -2228,11 +1949,59 @@ const TIME = {
     VERY_LONG: 60000
 };
 
+const TIME_SCHEMA = {
+    TICK: { type: 'positiveInt', min: 1 },
+    DEBOUNCE: { type: 'positiveInt', min: TIME.TICK },
+    TIMEOUT: { type: 'positiveInt', min: TIME.SECOND },
+    LONG: { type: 'positiveInt', min: TIME.TIMEOUT },
+    VERY_LONG: { type: 'positiveInt', min: TIME.LONG }
+};
+
 const LIMITS = {
     RETRIES: 3,
     BATCH: 50,
     MIN_GROUP: 3,
     MEMORY_THRESHOLD: 1073741824
+};
+
+const LIMITS_SCHEMA = {
+    RETRIES: { type: 'positiveInt', min: 1 },
+    BATCH: { type: 'positiveInt', min: 1 }
+};
+
+const GIT = {
+    statusPorcelainColumn: 3,
+    statusCodeLength: 2
+};
+
+const GIT_SCHEMA = {
+    statusPorcelainColumn: { type: 'positiveInt', min: 1, exact: GIT.statusPorcelainColumn },
+    statusCodeLength: { type: 'positiveInt', min: 1, exact: GIT.statusCodeLength }
+};
+
+const ERROR_SCHEMA = {
+    fileNotFound: { type: 'string', pattern: /ENOENT|not found/i },
+    resourceClosed: { type: 'string', pattern: /closed|disconnected/i },
+    processDetached: { type: 'string', pattern: /detached|exited/i },
+    operationTimeout: { type: 'string', pattern: /timeout|timed out/i }
+};
+
+const SEVERITY_SCHEMA = {
+    high: {
+        type: 'array',
+        items: { type: 'string' },
+        values: ['MAGIC_NUMBER', 'TYPE_ERROR', 'RESOURCE_LEAK']
+    },
+    medium: {
+        type: 'array',
+        items: { type: 'string' },
+        values: ['CONFIG_VIOLATION', 'DEPRECATED_PATH', 'PERFORMANCE_WARNING']
+    },
+    low: {
+        type: 'array',
+        items: { type: 'string' },
+        values: ['STYLE_VIOLATION', 'MINOR_ISSUE']
+    }
 };
 
 const PRINT = {
@@ -2263,7 +2032,22 @@ const BINARY = {
     GB: 1073741824,
 };
 
-// CATEGORICAL VALIDATION SYSTEM
+const CSS = {
+    FONT_WEIGHTS: [100, 200, 300, 400, 500, 600, 700, 800, 900]
+};
+
+const THRESHOLDS = {
+    MEMORY_LEAK_SLOPE: 1000,
+    MEMORY_SPIKE_MB: 50,
+    ERROR_CLUSTER_WINDOW: 1000,
+    TOP_RESULTS: 10,
+    AGGREGATE_WINDOW: 10,
+    MEMORY_PRESSURE_HIGH: 0.85,
+    MAX_FRACTION_DEPTH: 10,
+    EVENT_RATE_BUSY: 50,
+    VIEWPORT_HEIGHT: 100,
+    HASH_SHORT_LENGTH: 16
+};
 
 class ConfigPatternValidator {
     constructor(enforceStrict = false) {
@@ -2277,23 +2061,25 @@ class ConfigPatternValidator {
     }
     
     interceptFunctors() {
-        this.computationGraph = proofTrace;
+        this.computationGraph = traceOrchestrator ? traceOrchestrator.events : [];
     }
 
     extract(value) {
-        const maybeProof = proofTrace.get(value);
+        if (!traceOrchestrator) return null;
+        const maybeProof = traceOrchestrator.events.find(e => e.context.value === value);
         return Maybe.elim(
-            () => 'Maybe', // motive
-            () => null, // Nothing case
-            v => v      // Just case
+            () => 'Maybe',
+            () => null,
+            v => v
         )(maybeProof);
     }
     
     detectMagicNumber(value, path) {
         if (typeof value !== 'number') return false;
 
-        // Skip validation for config definitions
-        if (path.startsWith('CONFIG_RAW.') || path.startsWith('CONFIG.') || path.startsWith('TIME.') || path.startsWith('LIMITS.') || path.startsWith('PRINT.') || path.startsWith('BINARY.') || path.startsWith('CONFIG_SCHEMA.')) {
+        // Auto-discover config namespaces from ALL_CONFIGS
+        const configNames = Object.keys(ALL_CONFIGS);
+        if (configNames.some(name => path.startsWith(`${name}.`))) {
             return false;
         }
 
@@ -2307,7 +2093,7 @@ class ConfigPatternValidator {
 
         if (value === true || value === false) return false;
 
-        if (path.includes('.weight.') && [100, 200, 3 * 100, 400, 5 * 100, 6 * 100, 7 * 100, 800, 8 * 200 + 100].includes(value)) {
+        if (path.includes('.weight.') && CSS.FONT_WEIGHTS.includes(value)) {
             this.computationGraph.set(value, { functor: 'CSS_STANDARD', inputs: ['font-weight'], timestamp: 0 });
             return false;
         }
@@ -2411,7 +2197,8 @@ class ConfigPatternValidator {
         
         const byType = {};
         for (const v of this.violations) {
-            byType[v.type] = byType[v.type] || [];
+            if (!byType[v.type]) byType[v.type] = [];
+
             byType[v.type].push(v);
         }
         
@@ -2428,7 +2215,8 @@ class ConfigPatternValidator {
         if (byType.MAGIC_NUMBER) {
             const valueGroups = {};
             for (const v of byType.MAGIC_NUMBER) {
-                valueGroups[v.value] = valueGroups[v.value] || [];
+                if (!valueGroups[v.value]) valueGroups[v.value] = [];
+
                 valueGroups[v.value].push(v.path);
             }
             
@@ -2477,6 +2265,16 @@ CONFIG_RAW.core = {
     time: {
         msPerSecond: 1000,
         defaultSleepSeconds: 1
+    }
+};
+
+CONFIG_RAW.network = {
+    websocket: {
+        updateInterval: 33,
+        maxPayloadSize: 1048576
+    },
+    errors: {
+        addressInUse: 'EADDRINUSE'
     }
 };
 
@@ -2538,12 +2336,18 @@ CONFIG_RAW.morphisms = {
     kleisli: Pipeline.kleisli,  // Kleisli composition
     compose: Pipeline.compose,  // Standard composition
     
-    // Aggregator morphism for collecting distributed artifacts
     aggregator: {
         name: 'generate-index',
-        apply: null,  // Will use default generateIndex function
-        barrier: 'artifacts',  // Wait for all artifacts
+        apply: (docs) => renderView({ type: 'document-index' }, docs),
+        barrier: 'artifacts',
         timeout: TIME.LONG
+    },
+
+    stateToView: {
+        name: 'runtime-to-gui',
+        apply: null,
+        preserves: ['causality', 'metrics', 'events', 'errors'],
+        proof: 'bijection'
     },
     
     // Higher-order morphisms
@@ -2587,12 +2391,12 @@ CONFIG_RAW.contracts = {
         dependent: 'value-dependent',  // Dependent types
         higher: 'kind-polymorphic'  // Higher-kinded types
     },
-    
-    // Proof obligations
-    proofs: {
-        termination: true,  // Must prove termination
-        totality: true,  // Must be total
-        determinism: false,  // Can be non-deterministic
+
+    // validation requirements
+    validation: {
+        termination: true,
+        totality: true,
+        determinism: false,
         purity: true,  // Must be pure
         // Logical properties
         consistency: true,  // No contradictions
@@ -2608,10 +2412,10 @@ CONFIG_RAW.contracts = {
     
     // Resource limits
     resources: {
-        memory: 1073741824,
+        memory: LIMITS.MEMORY_THRESHOLD,
         time: TIME.VERY_LONG,
         energy: 100,  // Joules
-        bandwidth: 1048576,
+        bandwidth: BINARY.MB,
         // Complexity bounds
         space: 'O(n)',  // Space complexity
         runtime: 'O(n log n)',  // Time complexity
@@ -2779,13 +2583,15 @@ Object.assign(CONFIG_RAW, {
     
     // Git Integration
     git: {
-        statusPorcelainColumn: 3, // Column where filename starts in git status
+        statusPorcelainColumn: GIT.statusPorcelainColumn,
         commitMessageMaxLength: 0, // 0 = empty commits as required
     },
     
     // Prediction system
     prediction: {
-        failureThreshold: 0.7,  // 0.7 - probability threshold for failure prediction
+        failureThreshold: 0.7,  // probability threshold for emitting LIKELY_FAILURE event
+        remediationThreshold: 0.6,  // probability threshold for triggering auto-remediation
+        browserRestartThreshold: 0.85,  // probability threshold for restarting browser
     },
     
     // System limits and constraints for validation
@@ -2821,8 +2627,8 @@ Object.assign(CONFIG_RAW, {
 
     // Legacy files - now in documents.artifacts
     files: (() => {
-        const artifacts = CONFIG_RAW.documents?.artifacts || {};
-        const formats = CONFIG_RAW.documents?.formats || {};
+        const artifacts = CONFIG_RAW.documents?.artifacts;
+        const formats = CONFIG_RAW.documents?.formats;
         return {
             sourcePattern: '**/*.txt',
             workingDoc: {
@@ -3462,30 +3268,41 @@ const CONFIG_PROFILES = {
 
 // Schema functor: maps configuration space to validation constraints
 const CONFIG_SCHEMA = {
-    time: {
-        TICK: { type: 'number', min: 1, max: 1000 },
-        DEBOUNCE: { type: 'number', min: TIME.TICK, max: TIME.TIMEOUT },
-        SECOND: { type: 'number', exact: 1000 },
-        TIMEOUT: { type: 'number', min: 1000, max: TIME.VERY_LONG },
-        LONG: {
-            type: 'number',
-            min: 10000,
-            max: 120000
-        },
-        VERY_LONG: {
-            type: 'number',
-            min: TIME.LONG,
-            max: 300000
-        }
-    },
-    typography: {
-        pixels: {
-            base: { type: 'number', min: 12, max: 20 }
+    debug: {
+        properties: {
+            maxEvents: { type: 'number', min: CONFIG.limits.minDebugEvents },
+            maxMaps: { type: 'number', min: CONFIG.limits.minDebugMaps }
         }
     },
     scheduler: {
-        maxConcurrent: { type: 'number', min: 1, max: 10 },
-        retryLimit: { type: 'number', min: 1, max: 10 }
+        properties: {
+            maxConcurrent: { type: 'number', min: CONFIG.limits.minConcurrent, max: CONFIG.limits.maxConcurrent },
+            retryLimit: { type: 'number', min: 1, max: 10 }
+        }
+    },
+    processor: {
+        properties: {
+            hashLength: { type: 'number', min: CONFIG.limits.minHashLength, max: CONFIG.limits.maxHashLength },
+            headingMaxLevels: { type: 'number', exact: CONFIG.limits.htmlHeadingLevels },
+            tocMaxDepth: { type: 'number', max: CONFIG.processor.headingMaxLevels }
+        }
+    },
+    ui: {
+        properties: {
+            typography: {
+                properties: {
+                    scale: {
+                        type: 'object',
+                        valueSchema: { type: 'number', min: CONFIG.limits.minZero, max: CONFIG.limits.maxScaleValue }
+                    },
+                    pixels: {
+                        properties: {
+                            base: { type: 'number', min: CONFIG.limits.minFontSize, max: CONFIG.limits.maxFontSize }
+                        }
+                    }
+                }
+            }
+        }
     }
 };
 
@@ -3501,15 +3318,22 @@ typeChecker = new TypeChecker(true);
 // ACTIVATE VALIDATION
 
 
-// Validate ALL configuration objects, not just CONFIG
 const ALL_CONFIGS = {
     TIME,
+    TIME_SCHEMA,
     LIMITS,
+    LIMITS_SCHEMA,
+    GIT,
+    GIT_SCHEMA,
+    ERROR_SCHEMA,
+    SEVERITY_SCHEMA,
     PRINT,
     BINARY,
+    CSS,
+    THRESHOLDS,
+    CONFIG_RAW,
     CONFIG,
-    CONFIG_SCHEMA,
-    proofTrace
+    CONFIG_SCHEMA
 };
 
 
@@ -3529,16 +3353,22 @@ const CONFIG_PROXY = configPatternValidator.createProxy(CONFIG);
 function detectMagicNumberInCode(value, context) {
     // Extract numbers from any context - strings, templates, etc
     const extractNumbers = (input) => {
-        if (typeof input === 'number') return [input];
-        if (typeof input === 'string') {
+        try {
+            checkType(input, NumberType);
+            return [input];
+        } catch {}
+
+        try {
+            checkType(input, StringType);
             // Skip comments, explanatory text, and variable names
             if (input.includes('//') || input.includes('/*') || input.includes('*')) return [];
             if (/\b(p\d+|PRIMES|CONFIG|TIME|COMMON|LIMITS|SPACE|BINARY)\b/.test(input)) return [];
-            
+
             // Extract actual numeric literals from strings
             const matches = input.match(/\b\d+(\.\d+)?\b/g);
             return matches ? matches.map(Number) : [];
-        }
+        } catch {}
+
         return [];
     };
     
@@ -3640,91 +3470,140 @@ const Templates = {
 
 // CONFIGURATION SCHEMA
 
-// Schema validator with CausalDebugger integration
-class ConfigValidator {
-    constructor(schema, debuggerInstance) {
-        this.schema = schema;
-        this.debugger = debuggerInstance;
+// type validation via refinement types
+const checkType = (value, validator) => {
+    if (validator.apply) return validator.apply(value);
+    if (!validator.contains(value)) throw new Error('Type check failed');
+};
+
+
+// exact value matching
+const checkExact = (value, target) => {
+    if (value !== target) return `Not exact ${target}`;
+};
+
+// recursive schema validation with error collection
+class SchemaValidator {
+    constructor(types) {
+        this.types = types;
     }
-    
-    validate(config, path = 'CONFIG') {
+
+    validateValue(value, typeName) {
+        const validator = this.types[typeName];
+        if (!validator) throw new Error(`Unknown type: ${typeName}`);
+        checkType(value, validator);
+    }
+
+    validateSchema(obj, schema, path = '') {
         const errors = [];
         const warnings = [];
-        
-        // Recursive validation with path tracking
+
         const validateNode = (node, schemaNode, nodePath) => {
             if (!schemaNode) return;
-            
-            // Type checking
+
             if (schemaNode.type) {
-                const actualType = Array.isArray(node) ? 'array' : typeof node;
-                if (actualType !== schemaNode.type) {
-                    errors.push({
-                        path: nodePath,
-                        error: `Expected ${schemaNode.type}, got ${actualType}`,
-                        value: node
-                    });
-                    this.debugger.error(new Error(`Config type mismatch at ${nodePath}`), {
-                        expected: schemaNode.type,
-                        actual: actualType
-                    });
+                try {
+                    this.validateValue(node, schemaNode.type);
+                } catch (e) {
+                    errors.push({ path: nodePath, error: e.message, value: node });
                     return;
                 }
-            }
-            
-            // Range validation for numbers
-            if (schemaNode.type === 'number') {
-                if (schemaNode.min !== undefined && node < schemaNode.min) {
-                    errors.push({
-                        path: nodePath,
-                        error: `Value ${node} below minimum ${schemaNode.min}`,
-                        value: node
-                    });
-                }
-                if (schemaNode.max !== undefined && node > schemaNode.max) {
-                    errors.push({
-                        path: nodePath,
-                        error: `Value ${node} above maximum ${schemaNode.max}`,
-                        value: node
-                    });
-                }
-                if (schemaNode.exact !== undefined && node !== schemaNode.exact) {
-                    warnings.push({
-                        path: nodePath,
-                        warning: `Value ${node} not exact ${schemaNode.exact}`,
-                        value: node
-                    });
+
+                if (schemaNode.type === 'number') {
+                    if (schemaNode.min !== undefined && node < schemaNode.min) {
+                        errors.push({ path: nodePath, error: `Below minimum ${schemaNode.min}`, value: node });
+                    }
+                    if (schemaNode.max !== undefined && node > schemaNode.max) {
+                        errors.push({ path: nodePath, error: `Above maximum ${schemaNode.max}`, value: node });
+                    }
+
+                    if (schemaNode.exact !== undefined) {
+                        const warning = checkExact(node, schemaNode.exact);
+                        if (warning) warnings.push({ path: nodePath, warning, value: node });
+                    }
                 }
             }
-            
-            // Nested object validation
+
+            if (schemaNode.items && Array.isArray(node)) {
+                node.forEach((item, idx) => {
+                    validateNode(item, schemaNode.items, `${nodePath}[${idx}]`);
+                });
+            }
+
+            if (schemaNode.valueSchema && node && typeof node === 'object') {
+                for (const [key, value] of Object.entries(node)) {
+                    validateNode(value, schemaNode.valueSchema, `${nodePath}.${key}`);
+                }
+            }
+
             if (schemaNode.properties && node && typeof node === 'object') {
                 for (const [key, subSchema] of Object.entries(schemaNode.properties)) {
                     if (node[key] !== undefined) {
                         validateNode(node[key], subSchema, `${nodePath}.${key}`);
                     } else if (subSchema.required) {
-                        errors.push({
-                            path: `${nodePath}.${key}`,
-                            error: 'Required property missing'
-                        });
+                        errors.push({ path: `${nodePath}.${key}`, error: 'Required property missing' });
                     }
                 }
             }
         };
-        
-        // Validate against schema
-        for (const [key, schemaNode] of Object.entries(this.schema)) {
-            if (config[key] !== undefined) {
-                validateNode(config[key], schemaNode, `${path}.${key}`);
+
+        for (const [key, schemaNode] of Object.entries(schema)) {
+            if (obj[key] !== undefined) {
+                validateNode(obj[key], schemaNode, `${path}.${key}`);
             } else if (schemaNode.required) {
-                errors.push({
-                    path: `${path}.${key}`,
-                    error: 'Required section missing'
-                });
+                errors.push({ path: `${path}.${key}`, error: 'Required section missing' });
             }
         }
-        
+
         return { errors, warnings };
+    }
+}
+
+const NumberType = { contains: v => typeof v === 'number' };
+const StringType = { contains: v => typeof v === 'string' };
+const BoolType = { contains: v => typeof v === 'boolean' };
+const ArrayType = { contains: v => Array.isArray(v) };
+const ObjectType = { contains: v => typeof v === 'object' && v !== null && !Array.isArray(v) };
+
+const PositiveInt = Refinement(NumberType, n => n > 0 && Number.isInteger(n));
+const NonNegativeInt = Refinement(NumberType, n => n >= 0 && Number.isInteger(n));
+const ValidPath = Refinement(StringType, p => {
+    try {
+        return fs.existsSync(p);
+    } catch {
+        return false;
+    }
+});
+const NonEmptyString = Refinement(StringType, s => s.length > 0);
+
+class ConfigValidator {
+    constructor(schema, debuggerInstance) {
+        this.schema = schema;
+        this.debugger = debuggerInstance;
+        this.validator = new SchemaValidator({
+            number: NumberType,
+            string: StringType,
+            boolean: BoolType,
+            array: ArrayType,
+            object: ObjectType,
+            positiveInt: PositiveInt,
+            nonNegativeInt: NonNegativeInt,
+            nonEmptyString: NonEmptyString,
+            validPath: ValidPath
+        });
+    }
+
+    validate(config, path = 'CONFIG') {
+        const result = this.validator.validateSchema(config, this.schema, path);
+
+        result.errors.forEach(e => {
+            this.debugger.error(new Error(e.error), { path: e.path, value: e.value });
+        });
+        result.warnings.forEach(w => {
+            this.debugger.trace('CONFIG_WARNING', w);
+        });
+
+        return result;
     }
 }
 
@@ -3736,7 +3615,7 @@ function loadConfig(profile = process.env.NODE_ENV || 'development') {
     // Apply profile overrides
     if (CONFIG_PROFILES[profile]) {
         config = deepMerge(config, CONFIG_PROFILES[profile]);
-        causalDebugger.trace('CONFIG_PROFILE_LOADED', { profile });
+        traceOrchestrator.trace('CONFIG_PROFILE_LOADED', { profile });
     }
     
     return config;
@@ -3747,7 +3626,8 @@ function deepMerge(target, source) {
     const result = { ...target };
     for (const [key, value] of Object.entries(source)) {
         if (value && typeof value === 'object' && !Array.isArray(value)) {
-            result[key] = deepMerge(result[key] || {}, value);
+            if (!result[key]) result[key] = {};
+            result[key] = deepMerge(result[key], value);
         } else {
             result[key] = value;
         }
@@ -3784,42 +3664,7 @@ function validateConfig() {
         }
     };
     
-    // Run XSS validation
     validateNoXSS(CONFIG);
-    
-    // Validate TIME constants
-    if (TIME.TICK <= CONFIG.limits.minZero) errors.push('TIME.TICK must be positive');
-    if (TIME.DEBOUNCE < TIME.TICK) errors.push('TIME.DEBOUNCE should be >= TIME.TICK');
-    // TIME.SECOND is defined as 1000ms by convention
-    if (TIME.TIMEOUT < TIME.SECOND) errors.push(`TIME.TIMEOUT should be >= ${TIME.SECOND}ms`);
-    if (TIME.LONG < TIME.TIMEOUT) errors.push('TIME.LONG should be >= TIME.TIMEOUT');
-    if (TIME.VERY_LONG < TIME.LONG) errors.push('TIME.VERY_LONG should be >= TIME.LONG');
-    
-    // Validate LIMITS
-    if (LIMITS.RETRIES < CONFIG.limits.minPositive) errors.push('LIMITS.RETRIES must be at least 1');
-    if (LIMITS.BATCH < CONFIG.limits.minPositive) errors.push('LIMITS.BATCH must be at least 1');
-    
-    // Validate CONFIG.debug
-    if (CONFIG.debug.maxEvents < CONFIG.limits.minDebugEvents) errors.push('debug.maxEvents too small for useful debugging');
-    if (CONFIG.debug.maxMaps < CONFIG.limits.minDebugMaps) errors.push('debug.maxMaps too small for useful debugging');
-    
-    // Validate CONFIG.scheduler
-    if (CONFIG.scheduler.maxConcurrent < CONFIG.limits.minConcurrent) errors.push(`scheduler.maxConcurrent must be at least ${CONFIG.limits.minConcurrent}`);
-    if (CONFIG.scheduler.maxConcurrent > CONFIG.limits.maxConcurrent) errors.push('scheduler.maxConcurrent too high, may cause browser issues');
-    
-    // Validate CONFIG.processor
-    if (CONFIG.processor.hashLength < CONFIG.limits.minHashLength) errors.push('processor.hashLength too short for uniqueness');
-    if (CONFIG.processor.hashLength > CONFIG.limits.maxHashLength) errors.push('processor.hashLength unnecessarily long');
-    if (CONFIG.processor.headingMaxLevels !== CONFIG.limits.htmlHeadingLevels) errors.push(`HTML only supports ${CONFIG.limits.htmlHeadingLevels} heading levels`);
-    if (CONFIG.processor.tocMaxDepth > CONFIG.processor.headingMaxLevels) {
-        errors.push('tocMaxDepth cannot exceed headingMaxLevels');
-    }
-    
-    // Validate CONFIG.ui typography scale values
-    for (const [key, val] of Object.entries(CONFIG.ui.typography.scale)) {
-        if (val < CONFIG.limits.minZero) errors.push(`Negative scale value found: ${key}=${val}`);
-        if (val > CONFIG.limits.maxScaleValue) errors.push(`Excessive scale value found: ${key}=${val}`);
-    }
     
     // Validate transition durations
     const transitions = [
@@ -3832,10 +3677,6 @@ function validateConfig() {
         errors.push('Transition durations should be ordered: fast < normal < slow');
     }
     
-    // Validate font sizes are sensible
-    if (CONFIG.ui.typography.pixels.base < CONFIG.limits.minFontSize || CONFIG.ui.typography.pixels.base > CONFIG.limits.maxFontSize) {
-        errors.push(`fontSizeBase should be between ${CONFIG.limits.minFontSize}-${CONFIG.limits.maxFontSize}px for readability`);
-    }
     
     // Check for any remaining hardcoded values that slipped through
     const configStr = JSON.stringify(CONFIG);
@@ -3859,25 +3700,38 @@ function validateConfig() {
     }
     
     
-    // Now validate with schema
-    const validator = new ConfigValidator(CONFIG_SCHEMA, causalDebugger);
-    const schemaValidation = validator.validate(CONFIG);
-    
-    if (schemaValidation.errors.length > 0) {
-        console.error('[CONFIG] Schema validation errors:');
-        schemaValidation.errors.forEach(e => {
-            console.error(`  ${e.path}: ${e.error}`);
-            causalDebugger.error(new Error(e.error), { path: e.path, value: e.value });
-        });
-        errors.push(...schemaValidation.errors.map(e => `${e.path}: ${e.error}`));
+    // Validate all configs with schemas
+    const SCHEMA_MAP = {
+        TIME: TIME_SCHEMA,
+        LIMITS: LIMITS_SCHEMA,
+        GIT: GIT_SCHEMA,
+        CONFIG: CONFIG_SCHEMA
+    };
+
+    const allValidations = [];
+    for (const [name, schema] of Object.entries(SCHEMA_MAP)) {
+        const validator = new ConfigValidator(schema, traceOrchestrator);
+        const config = ALL_CONFIGS[name];
+        if (config) {
+            allValidations.push(validator.validate(config, name));
+        }
     }
-    
-    if (schemaValidation.warnings.length > 0) {
-        console.warn('[CONFIG] Schema validation warnings:');
-        schemaValidation.warnings.forEach(w => {
-            console.warn(`  ${w.path}: ${w.warning}`);
-            causalDebugger.trace('CONFIG_WARNING', w);
-        });
+
+    for (const validation of allValidations) {
+        if (validation.errors.length > 0) {
+            validation.errors.forEach(e => {
+                console.error(`  ${e.path}: ${e.error}`);
+                traceOrchestrator.error(new Error(e.error), { path: e.path, value: e.value });
+            });
+            errors.push(...validation.errors.map(e => `${e.path}: ${e.error}`));
+        }
+
+        if (validation.warnings.length > 0) {
+            validation.warnings.forEach(w => {
+                console.warn(`  ${w.path}: ${w.warning}`);
+                traceOrchestrator.trace('CONFIG_WARNING', w);
+            });
+        }
     }
     
     // Final check
@@ -3890,29 +3744,744 @@ function validateConfig() {
     ResourcePools.retries.available = ResourcePools.retries.total;
     ResourcePools.concurrent.limit = CONFIG.scheduler.maxConcurrent;
     
-    return { errors: [], warnings: schemaValidation.warnings };
+    const allWarnings = allValidations.flatMap(v => v.warnings);
+    return { errors: [], warnings: allWarnings };
 }
 
-// DEBUGGING & ERROR TRACKING
+// TRACE ANALYSIS & RUNTIME VERIFICATION
 
-class CausalDebugger {
-    constructor() {
+// EventStore - pure data storage
+class EventStore {
+    constructor(maxEvents = 10000, maxMaps = 1000) {
         this.events = [];
         this.errors = new Map();
         this.causality = new Map();
         this.stackTraces = new Map();
         this.performanceMarks = new Map();
-        this.maxEvents = CONFIG.debug.maxEvents;
-        this.maxMaps = CONFIG.debug.maxMaps;
+        this.runtimeViolations = new Set();
+        this.violationsReported = false;
+        this.maxEvents = maxEvents;
+        this.maxMaps = maxMaps;
         this.currentContext = null;
-        this.runtimeViolations = new Set(); // Track runtime issues
-        this.violationsReported = false; // Linear consumption flag
-        
-        // Predictive failure detection via Markov chains
-        this.markovChain = new Map(); // event -> { nextEvent -> count }
-        this.failurePatterns = new Map(); // pattern -> failure probability
-        
-        // Set up periodic cleanup using lazy evaluation
+    }
+
+    append(event) {
+        this.events.push(event);
+        if (this.events.length > this.maxEvents) {
+            this.events = this.events.slice(-this.maxEvents);
+        }
+
+        if (this.currentContext) {
+            if (!this.causality.has(this.currentContext.id)) {
+                this.causality.set(this.currentContext.id, []);
+            }
+            this.causality.get(this.currentContext.id).push(event.id);
+        }
+
+        this.currentContext = event;
+        return event.id;
+    }
+
+    getCausalChain(eventId) {
+        const chain = [];
+        let current = this.events.find(e => e.id === eventId);
+        while (current) {
+            chain.unshift(current);
+            current = current.parent ? this.events.find(e => e.id === current.parent) : null;
+        }
+        return chain;
+    }
+
+    cleanup() {
+        const trimMap = (map) => {
+            if (map.size > this.maxMaps) {
+                const toDelete = map.size - this.maxMaps;
+                const keys = Array.from(map.keys()).slice(0, toDelete);
+                keys.forEach(k => map.delete(k));
+            }
+        };
+        trimMap(this.errors);
+        trimMap(this.causality);
+        trimMap(this.stackTraces);
+        trimMap(this.performanceMarks);
+    }
+}
+
+// CausalAnalysis - Markov chain prediction & failure patterns
+class CausalAnalysis {
+    constructor(eventStore) {
+        this.store = eventStore;
+        this.markovChain = new Map();
+        this.failurePatterns = new Map();
+    }
+
+    updateMarkovChain(fromEvent, toEvent) {
+        if (!this.markovChain.has(fromEvent)) {
+            this.markovChain.set(fromEvent, new Map());
+        }
+
+        const transitions = this.markovChain.get(fromEvent);
+        const count = Maybe.elim(
+            () => 'Maybe',
+            () => 0,
+            c => c
+        )(transitions.get(toEvent));
+        transitions.set(toEvent, count + 1);
+
+        if (toEvent.includes('ERROR')) {
+            const pattern = `${fromEvent} -> ${toEvent}`;
+            const occurrences = transitions.get(toEvent);
+            const total = Array.from(transitions.values()).reduce((a, b) => a + b, 0);
+            const probability = occurrences / total;
+
+            this.failurePatterns.set(pattern, probability);
+        }
+    }
+
+    predictNext(currentEvent) {
+        if (!this.markovChain.has(currentEvent)) {
+            return [];
+        }
+
+        const transitions = this.markovChain.get(currentEvent);
+        const total = Array.from(transitions.values()).reduce((a, b) => a + b, 0);
+
+        return Array.from(transitions.entries())
+            .map(([event, count]) => ({
+                event,
+                probability: count / total
+            }))
+            .sort((a, b) => b.probability - a.probability)
+            .slice(0, 5);
+    }
+
+    getFailureProbability(event) {
+        const predictions = this.predictNext(event);
+        return predictions
+            .filter(p => p.event.includes('ERROR'))
+            .reduce((sum, p) => sum + p.probability, 0);
+    }
+
+    buildCausalityGraph() {
+        const nodes = new Map();
+        const edges = [];
+
+        this.store.causality.forEach((chain, id) => {
+            chain.forEach((event, index) => {
+                nodes.set(event.id, event);
+                if (index > 0) {
+                    edges.push({
+                        from: chain[index - 1].id,
+                        to: event.id,
+                        weight: event.timestamp - chain[index - 1].timestamp
+                    });
+                }
+            });
+        });
+
+        return { nodes: Array.from(nodes.values()), edges };
+    }
+}
+
+// MetricsCalculator - computes performance metrics and analysis
+class MetricsCalculator {
+    constructor(eventStore, patternDetection) {
+        this.store = eventStore;
+        this.patterns = patternDetection;
+    }
+
+    getMetrics() {
+        const recentEvents = this.store.events.slice(-CONFIG.debug.analysis.recentWindowSize);
+        const recentErrors = Array.from(this.store.errors.values()).slice(-CONFIG.debug.analysis.errorWindowSize);
+
+        return {
+            eventRate: this.calculateEventRate(recentEvents),
+            errorRate: this.calculateErrorRate(recentErrors),
+            memoryPressure: this.calculateMemoryPressure(),
+            performanceBottlenecks: this.identifyBottlenecks(),
+            taskSuccess: this.calculateTaskSuccessRate()
+        };
+    }
+
+    getPerformanceProfile() {
+        const profiles = new Map();
+
+        for (const [label, data] of this.store.performanceMarks) {
+            const category = this.categorizeOperation(label);
+            if (!profiles.has(category)) {
+                profiles.set(category, { count: 0, totalTime: 0, totalMemory: 0, operations: [] });
+            }
+            const profile = profiles.get(category);
+            profile.count++;
+            profile.totalTime += data.duration;
+            profile.totalMemory += data.memDelta;
+            profile.operations.push({ label, ...data });
+        }
+
+        return Array.from(profiles.entries()).map(([category, data]) => ({
+            category,
+            avgTime: data.totalTime / data.count,
+            avgMemory: data.totalMemory / data.count,
+            ...data
+        }));
+    }
+
+    getCriticalPath() {
+        const paths = [];
+
+        // Find all error events and trace their paths
+        for (const [errorId, errorData] of this.store.errors) {
+            const chain = errorData.causalChain;
+            if (!chain || chain.length === 0) continue;
+            const duration = chain.length > 1 ? chain[chain.length - 1].timestamp - chain[0].timestamp : 0;
+            paths.push({
+                errorId,
+                duration,
+                steps: chain.length,
+                path: chain.map(e => e.event)
+            });
+        }
+
+        // Sort by duration to find longest paths
+        return paths.sort((a, b) => b.duration - a.duration).slice(0, CONFIG.debug.analysis.topResultsLimit);
+    }
+
+    detectPatterns() {
+        const patterns = {
+            memoryLeaks: this.patterns.detectMemoryLeaks(),
+            performanceDegradation: this.patterns.detectPerformanceDegradation(),
+            errorClusters: this.patterns.detectErrorClusters(),
+            resourceSpikes: this.patterns.detectResourceSpikes()
+        };
+
+        return patterns;
+    }
+
+    calculateEventRate(events) {
+        if (events.length < 2) return 0;
+        const timeSpan = events[events.length - 1].timestamp - events[0].timestamp;
+        return timeSpan > 0 ? (events.length / timeSpan) * CONFIG.core.time.msPerSecond : 0;
+    }
+
+    calculateErrorRate(errors) {
+        if (errors.length === 0) return 0;
+        const timeSpan = Date.now() - errors[0].timestamp;
+        return timeSpan > 0 ? (errors.length / timeSpan) * CONFIG.core.time.msPerSecond : 0;
+    }
+
+    calculateMemoryPressure() {
+        const mem = process.memoryUsage();
+        return mem.heapUsed / mem.heapTotal;
+    }
+
+    identifyBottlenecks() {
+        const slowOps = [];
+        for (const [label, data] of this.store.performanceMarks) {
+            if (data.duration > CONFIG.debug.performanceWarnThreshold) {
+                slowOps.push({ operation: label, label, duration: data.duration, avgDuration: data.duration });
+            }
+        }
+        return slowOps.sort((a, b) => b.duration - a.duration).slice(0, CONFIG.debug.analysis.topResultsLimit);
+    }
+
+    calculateTaskSuccessRate() {
+        const taskEvents = this.store.events.filter(e => e.event.includes(CONFIG.strings.operationCategories[CONFIG.strings.operationCategories.length - 1]));
+        const errorEvents = Array.from(this.store.errors.values());
+
+        if (taskEvents.length === 0) return 1;
+        const failureCount = errorEvents.filter(e => e.context.task).length;
+        return 1 - (failureCount / taskEvents.length);
+    }
+
+    categorizeOperation(label) {
+        for (const category of CONFIG.strings.operationCategories) {
+            if (label.includes(category)) return category;
+        }
+        return CONFIG.strings.defaultCategory;
+    }
+}
+
+// PatternDetection - detects anomalies and patterns in event streams
+class PatternDetection {
+    constructor(eventStore) {
+        this.store = eventStore;
+    }
+
+    detectMemoryLeaks() {
+        const memoryTrend = this.store.events.slice(-CONFIG.debug.analysis.memoryTrendSize).map(e => e.memory.heapUsed);
+        if (memoryTrend.length < CONFIG.process.lockRetryAttempts) return false;
+
+        // Simple linear regression to detect upward trend
+        const n = memoryTrend.length;
+        const indices = Array.from({ length: n }, (_, i) => i);
+        const sumX = indices.reduce((a, b) => a + b, 0);
+        const sumY = memoryTrend.reduce((a, b) => a + b, 0);
+        const sumXY = indices.reduce((sum, x, i) => sum + x * memoryTrend[i], 0);
+        const sumX2 = indices.reduce((sum, x) => sum + x * x, 0);
+
+        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        return slope > THRESHOLDS.MEMORY_LEAK_SLOPE;
+    }
+
+    detectPerformanceDegradation() {
+        const recent = Array.from(this.store.performanceMarks.values()).slice(-CONFIG.debug.analysis.performanceSampleSize);
+        if (recent.length < CONFIG.process.lockRetryAttempts) return false;
+
+        const halfPoint = Math.floor(recent.length / 2);
+        const firstHalf = recent.slice(0, halfPoint);
+        const secondHalf = recent.slice(halfPoint);
+
+        const avgFirst = firstHalf.reduce((sum, d) => sum + d.duration, 0) / firstHalf.length;
+        const avgSecond = secondHalf.reduce((sum, d) => sum + d.duration, 0) / secondHalf.length;
+
+        return avgSecond > avgFirst * 2;
+    }
+
+    detectErrorClusters() {
+        const errors = Array.from(this.store.errors.values());
+        if (errors.length < CONFIG.processor.minGroupSize) return [];
+
+        const clusters = [];
+        let currentCluster = [errors[0]];
+
+        for (let i = 1; i < errors.length; i++) {
+            const timeDiff = errors[i].timestamp - errors[i - 1].timestamp;
+            if (timeDiff < THRESHOLDS.ERROR_CLUSTER_WINDOW) {
+                currentCluster.push(errors[i]);
+            } else {
+                if (currentCluster.length >= CONFIG.processor.minGroupSize) {
+                    clusters.push(currentCluster);
+                }
+                currentCluster = [errors[i]];
+            }
+        }
+
+        if (currentCluster.length >= CONFIG.processor.minGroupSize) {
+            clusters.push(currentCluster);
+        }
+
+        return clusters;
+    }
+
+    detectResourceSpikes() {
+        const spikes = [];
+        const memoryData = this.store.events.map(e => ({ timestamp: e.timestamp, heap: e.memory.heapUsed }));
+
+        for (let i = 1; i < memoryData.length; i++) {
+            const delta = memoryData[i].heap - memoryData[i - 1].heap;
+            if (delta > BINARY.MB * THRESHOLDS.MEMORY_SPIKE_MB) {
+                spikes.push({
+                    timestamp: memoryData[i].timestamp,
+                    delta,
+                    event: this.store.events[i].event
+                });
+            }
+        }
+
+        return spikes;
+    }
+}
+
+// TelemetryExporter - exports metrics in various formats (Prometheus, Datadog, JSON)
+class TelemetryExporter {
+    constructor(orchestrator) {
+        this.orchestrator = orchestrator;
+        this.lazyTelemetry = null;
+    }
+
+    initializeLazyTelemetry() {
+        this.lazyTelemetry = new Lazy(() => ({
+            metrics: new Lazy(() => this.orchestrator.getMetrics()),
+            profile: new Lazy(() => this.orchestrator.getPerformanceProfile()),
+            patterns: new Lazy(() => this.orchestrator.detectPatterns()),
+            system: new Lazy(() => ({
+                memory: process.memoryUsage(),
+                cpu: process.cpuUsage(),
+                platform: process.platform,
+                nodeVersion: process.version,
+                pid: process.pid,
+                uptime: Date.now() - (this.orchestrator.events[0]?.timestamp || Date.now())
+            })),
+            events: new Lazy(() => {
+                const now = Date.now();
+                return {
+                    total: this.orchestrator.events.length,
+                    rate: this.orchestrator.calculateEventRate(this.orchestrator.events),
+                    recentCount: this.orchestrator.events.filter(e => now - e.timestamp < TIME.VERY_LONG).length,
+                    oldestTimestamp: this.orchestrator.events[0]?.timestamp || null,
+                    newestTimestamp: this.orchestrator.events[this.orchestrator.events.length - 1]?.timestamp || null,
+                    recent: new LazyStream(
+                        this.orchestrator.events[this.orchestrator.events.length - 1] || null,
+                        () => this.orchestrator.events.length > 1
+                            ? new LazyStream(this.orchestrator.events[this.orchestrator.events.length - 2], null)
+                            : null
+                    )
+                };
+            }),
+            errors: new Lazy(() => ({
+                total: this.orchestrator.errors.size,
+                rate: this.orchestrator.calculateErrorRate(Array.from(this.orchestrator.errors.values())),
+                recent: new Lazy(() =>
+                    Array.from(this.orchestrator.errors.values())
+                        .filter(e => Date.now() - e.timestamp < TIME.VERY_LONG)
+                        .map(e => ({
+                            message: e.error.message,
+                            timestamp: e.timestamp,
+                            context: e.context,
+                            chainLength: e.causalChain.length
+                        }))
+                ),
+                clusters: new Lazy(() =>
+                    this.orchestrator.detectErrorClusters().map(cluster => ({
+                        size: cluster.length,
+                        startTime: cluster[0].timestamp,
+                        endTime: cluster[cluster.length - 1].timestamp,
+                        types: [...new Set(cluster.map(e => e.error.message.split(':')[0]))]
+                    }))
+                )
+            })),
+            performance: new Lazy(() => ({
+                marks: this.orchestrator.performanceMarks.size,
+                profile: new Lazy(() => this.orchestrator.getPerformanceProfile()),
+                bottlenecks: new Lazy(() => this.orchestrator.identifyBottlenecks()),
+                criticalPaths: new Lazy(() => this.orchestrator.getCriticalPath()),
+                slowestOperations: new Lazy(() =>
+                    Array.from(this.orchestrator.performanceMarks.entries())
+                        .sort((a, b) => b[1].duration - a[1].duration)
+                        .slice(0, THRESHOLDS.TOP_RESULTS)
+                        .map(([label, data]) => ({
+                            label,
+                            duration: data.duration,
+                            memory: data.memDelta,
+                            timestamp: data.timestamp
+                        }))
+                )
+            })),
+            causality: new Lazy(() => ({
+                chains: this.orchestrator.causality.size,
+                maxChainLength: new Lazy(() =>
+                    Math.max(...Array.from(this.orchestrator.causality.values()).map(c => c.length), 0)
+                ),
+                orphanEvents: new Lazy(() =>
+                    this.orchestrator.events.filter(e => !e.parent && !this.orchestrator.causality.has(e.id)).length
+                ),
+                graph: new Lazy(() => this.orchestrator.buildCausalityGraph())
+            })),
+            scheduler: new Lazy(() =>
+                (typeof scheduler !== 'undefined' && scheduler) ? {
+                    queued: scheduler.queue.length,
+                    running: scheduler.running.size,
+                    locked: scheduler.locks.size,
+                    history: new Lazy(() =>
+                        Array.from(scheduler.buildHistory.entries()).map(([file, stats]) => ({
+                            file,
+                            success: stats.success,
+                            failure: stats.failure,
+                            successRate: (stats.success + stats.failure) > 0
+                                ? stats.success / (stats.success + stats.failure)
+                                : 0
+                        }))
+                    )
+                } : null
+            ),
+            processor: new Lazy(() =>
+                (typeof processor !== 'undefined' && processor?.state) ? {
+                    browser: processor.state.browser !== null,
+                    pages: processor.state.pages.size,
+                    hashes: processor.state.hashes.size,
+                    building: processor.state.building.size,
+                    errors: processor.state.errors.length,
+                    builds: processor.state.stats.builds,
+                    uptime: Date.now() - processor.state.stats.uptime
+                } : null
+            ),
+            export: new Lazy(() => {
+                const timestamp = Date.now();
+                const data = LazyFunctor.extract({
+                    timestamp,
+                    system: this.lazyTelemetry.value.system,
+                    events: this.lazyTelemetry.value.events,
+                    errors: this.lazyTelemetry.value.errors,
+                    performance: this.lazyTelemetry.value.performance,
+                    causality: this.lazyTelemetry.value.causality,
+                    patterns: this.lazyTelemetry.value.patterns,
+                    metrics: this.lazyTelemetry.value.metrics,
+                    scheduler: this.lazyTelemetry.value.scheduler,
+                    processor: this.lazyTelemetry.value.processor
+                });
+                return {
+                    timestamp,
+                    data,
+                    json: new Lazy(() => JSON.stringify(data, null, 2)),
+                    metrics: new Lazy(() => this.formatMetrics(data)),
+                    timeseries: new Lazy(() => this.formatTimeseries(data))
+                };
+            })
+        }));
+        return this.lazyTelemetry;
+    }
+
+    createTelemetryStream() {
+        if (!this.lazyTelemetry) {
+            this.initializeLazyTelemetry();
+        }
+        const telemetryStream = fix(stream =>
+            new LazyStream(
+                new Lazy(() => ({
+                    timestamp: Date.now(),
+                    snapshot: this.lazyTelemetry.value.export.value.data
+                })),
+                () => {
+                    return new Lazy(() => {
+                        return new PullPromise(async () => {
+                            await new Promise(resolve =>
+                                setTimeout(resolve, CONFIG.watcher.interval || TIME.TICK.value)
+                            );
+                            return stream.value;
+                        });
+                    });
+                }
+            )
+        );
+        telemetryStream.deltaMetrics = new Lazy(() => telemetryStream.value
+            .window(2)
+            .map(window => {
+                if (window.length < 2) return null;
+                const [prev, curr] = window;
+                return {
+                    timestamp: curr.timestamp,
+                    timeDelta: curr.timestamp - prev.timestamp,
+                    eventDelta: curr.snapshot.events.total - prev.snapshot.events.total,
+                    errorDelta: curr.snapshot.errors.total - prev.snapshot.errors.total,
+                    memoryDelta: curr.snapshot.system.memory.heapUsed - prev.snapshot.system.memory.heapUsed
+                };
+            })
+            .filter(delta => delta !== null)
+        );
+        telemetryStream.anomalies = new Lazy(() => telemetryStream.value
+            .map(snapshot => {
+                const anomalies = [];
+                if (snapshot.snapshot.errors.rate > LIMITS.RETRIES) {
+                    anomalies.push({
+                        type: 'HIGH_ERROR_RATE',
+                        value: snapshot.snapshot.errors.rate,
+                        timestamp: snapshot.timestamp
+                    });
+                }
+                const memoryPressure = snapshot.snapshot.system.memory.heapUsed /
+                                      snapshot.snapshot.system.memory.heapTotal;
+                const threshold = CONFIG.core.limits.memoryPressureThreshold;
+                if (memoryPressure > (threshold instanceof Lazy ? threshold.value : threshold)) {
+                    anomalies.push({
+                        type: 'HIGH_MEMORY_PRESSURE',
+                        value: memoryPressure,
+                        timestamp: snapshot.timestamp
+                    });
+                }
+                const maxRate = CONFIG.core.limits.maxEventRate;
+                if (snapshot.snapshot.events.rate > (maxRate instanceof Lazy ? maxRate.value : maxRate)) {
+                    anomalies.push({
+                        type: 'EVENT_SPIKE',
+                        value: snapshot.snapshot.events.rate,
+                        timestamp: snapshot.timestamp
+                    });
+                }
+                return anomalies.length > 0 ? { timestamp: snapshot.timestamp, anomalies } : null;
+            })
+            .filter(anomaly => anomaly !== null)
+        );
+        telemetryStream.aggregates = new Lazy(() => telemetryStream.value
+            .window(THRESHOLDS.AGGREGATE_WINDOW)
+            .map(window => ({
+                timestamp: Date.now(),
+                windowSize: window.length,
+                avgEventRate: window.reduce((sum, s) => sum + s.snapshot.events.rate, 0) / window.length,
+                avgErrorRate: window.reduce((sum, s) => sum + s.snapshot.errors.rate, 0) / window.length,
+                maxMemory: Math.max(...window.map(s => s.snapshot.system.memory.heapUsed)),
+                minMemory: Math.min(...window.map(s => s.snapshot.system.memory.heapUsed))
+            }))
+        );
+        return telemetryStream;
+    }
+
+    exportTelemetry() {
+        if (!this.lazyTelemetry) {
+            this.initializeLazyTelemetry();
+        }
+        const exported = this.lazyTelemetry.value.export.value;
+        return {
+            raw: exported.data,
+            metrics: exported.metrics.value,
+            timeseries: exported.timeseries.value,
+            json: exported.json.value
+        };
+    }
+
+    formatMetrics(telemetry) {
+        const metrics = [];
+        metrics.push(`# HELP hct_events_total Total number of events`);
+        metrics.push(`# TYPE hct_events_total gauge`);
+        metrics.push(`hct_events_total ${telemetry.events.total}`);
+        metrics.push(`# HELP hct_events_rate Events per second`);
+        metrics.push(`# TYPE hct_events_rate gauge`);
+        metrics.push(`hct_events_rate ${(telemetry.events.rate ?? 0).toFixed(2)}`);
+        metrics.push(`# HELP hct_errors_total Total number of errors`);
+        metrics.push(`# TYPE hct_errors_total counter`);
+        metrics.push(`hct_errors_total ${telemetry.errors.total}`);
+        metrics.push(`# HELP hct_memory_heap_used_bytes Heap memory used`);
+        metrics.push(`# TYPE hct_memory_heap_used_bytes gauge`);
+        metrics.push(`hct_memory_heap_used_bytes ${telemetry.system?.memory?.heapUsed ?? 0}`);
+        metrics.push(`# HELP hct_memory_pressure Memory pressure ratio`);
+        metrics.push(`# TYPE hct_memory_pressure gauge`);
+        metrics.push(`hct_memory_pressure ${(telemetry.metrics.memoryPressure ?? 0).toFixed(3)}`);
+        if (telemetry.performance?.profile) {
+            telemetry.performance.profile.forEach(profile => {
+                metrics.push(`# HELP hct_operation_duration_ms Operation duration by category`);
+                metrics.push(`# TYPE hct_operation_duration_ms histogram`);
+                metrics.push(`hct_operation_duration_ms{category="${profile.category}"} ${(profile.avgTime ?? 0).toFixed(2)}`);
+            });
+        }
+        if (telemetry.scheduler) {
+            metrics.push(`# HELP hct_scheduler_queue_size Number of queued tasks`);
+            metrics.push(`# TYPE hct_scheduler_queue_size gauge`);
+            metrics.push(`hct_scheduler_queue_size ${telemetry.scheduler.queued}`);
+            metrics.push(`# HELP hct_scheduler_running_tasks Number of running tasks`);
+            metrics.push(`# TYPE hct_scheduler_running_tasks gauge`);
+            metrics.push(`hct_scheduler_running_tasks ${telemetry.scheduler.running}`);
+        }
+        if (telemetry.processor) {
+            metrics.push(`# HELP hct_processor_builds_total Total builds completed`);
+            metrics.push(`# TYPE hct_processor_builds_total counter`);
+            metrics.push(`hct_processor_builds_total ${telemetry.processor.builds}`);
+            metrics.push(`# HELP hct_processor_pages_open Number of browser pages open`);
+            metrics.push(`# TYPE hct_processor_pages_open gauge`);
+            metrics.push(`hct_processor_pages_open ${telemetry.processor.pages}`);
+        }
+        return metrics.join('\n');
+    }
+
+    formatTimeseries(telemetry) {
+        const ts = Math.floor(telemetry.timestamp / TIME.SECOND);
+        const tags = [`env:${process.env.NODE_ENV || 'development'}`, `pid:${telemetry.system.pid}`];
+
+        const series = [
+            { metric: 'hct.events.total', points: [[ts, telemetry.events.total]], type: 'gauge', tags },
+            { metric: 'hct.events.rate', points: [[ts, telemetry.events.rate]], type: 'gauge', tags },
+            { metric: 'hct.errors.total', points: [[ts, telemetry.errors.total]], type: 'count', tags },
+            { metric: 'hct.memory.heap.used', points: [[ts, telemetry.system.memory.heapUsed]], type: 'gauge', tags }
+        ];
+
+        if (telemetry.performance?.profile) {
+            telemetry.performance.profile.forEach(p => {
+                series.push({
+                    metric: 'hct.operation.duration',
+                    points: [[ts, p.avgTime ?? 0]],
+                    type: 'gauge',
+                    tags: [...tags, `category:${p.category}`]
+                });
+            });
+        }
+
+        return { series };
+    }
+}
+
+// InvariantChecker - verifies runtime properties over event traces
+class InvariantChecker {
+    constructor(eventStore) {
+        this.store = eventStore;
+    }
+
+    checkInvariant(property, evidence) {
+        const violations = [];
+        for (const event of this.store.events) {
+            if (!property(event, evidence)) {
+                violations.push(event);
+            }
+        }
+        return violations.length === 0 ? { holds: true } : { holds: false, violations };
+    }
+
+    checkHermetic(buildId) {
+        const buildEvents = this.store.events.filter(e => e.context.buildId === buildId);
+        const inputs = buildEvents.filter(e => e.event === 'INPUT_READ');
+        const outputs = buildEvents.filter(e => e.event === 'OUTPUT_WRITE');
+        const inputHashes = inputs.map(e => e.context.hash).sort().join(',');
+        const outputHashes = outputs.map(e => e.context.hash).sort().join(',');
+        const property = (otherBuildId) => {
+            const otherBuildEvents = this.store.events.filter(e => e.context.buildId === otherBuildId);
+            const otherInputs = otherBuildEvents.filter(e => e.event === 'INPUT_READ');
+            const otherOutputs = otherBuildEvents.filter(e => e.event === 'OUTPUT_WRITE');
+            const otherInputHashes = otherInputs.map(e => e.context.hash).sort().join(',');
+            const otherOutputHashes = otherOutputs.map(e => e.context.hash).sort().join(',');
+            return inputHashes === otherInputHashes ? outputHashes === otherOutputHashes : true;
+        };
+        const allBuilds = [...new Set(this.store.events.map(e => e.context.buildId))].filter(id => id && id !== buildId);
+        const violations = allBuilds.filter(id => !property(id));
+        return violations.length === 0 ? { hermetic: true } : { hermetic: false, violations };
+    }
+
+    checkCacheValid(cacheKey) {
+        const cacheEvents = this.store.events.filter(e => e.context.cacheKey === cacheKey);
+        if (cacheEvents.length === 0) return { valid: true, reason: 'no-cache-events' };
+        const cacheWrite = cacheEvents.find(e => e.event === 'CACHE_WRITE');
+        if (!cacheWrite) return { valid: false, reason: 'no-write-event' };
+        const inputsAtWrite = cacheWrite.context.inputs;
+        const currentInputModTimes = inputsAtWrite.map(input => ({
+            file: input,
+            mtime: this.store.events.filter(e => e.context.file === input && e.event === 'FILE_MODIFIED')
+                .sort((a, b) => b.timestamp - a.timestamp)[0]?.timestamp
+        }));
+        const invalidInputs = currentInputModTimes.filter(i => i.mtime > cacheWrite.timestamp);
+        return invalidInputs.length === 0 ? { valid: true } : { valid: false, invalidInputs };
+    }
+
+    checkIncremental(evidence) {
+        const rebuilds = this.store.events.filter(e => e.event === 'BUILD_START');
+        const violations = [];
+        for (const rebuild of rebuilds) {
+            const changedFiles = evidence.changedFiles;
+            const builtFiles = this.store.events
+                .filter(e => e.timestamp > rebuild.timestamp && e.event === 'FILE_BUILT')
+                .map(e => e.context.file);
+            const unnecessaryBuilds = builtFiles.filter(f => !changedFiles.includes(f));
+            if (unnecessaryBuilds.length > 0) {
+                violations.push({ rebuild: rebuild.id, unnecessary: unnecessaryBuilds });
+            }
+        }
+        return violations.length === 0 ? { incremental: true } : { incremental: false, violations };
+    }
+}
+
+// TraceOrchestrator - main class delegating to specialized components
+class TraceOrchestrator {
+    constructor() {
+        this.store = new EventStore(CONFIG.debug.maxEvents, CONFIG.debug.maxMaps);
+        this.causalAnalysis = new CausalAnalysis(this.store);
+        this.patternDetection = new PatternDetection(this.store);
+        this.metricsCalculator = new MetricsCalculator(this.store, this.patternDetection);
+        this.telemetryExporter = new TelemetryExporter(this);
+        this.invariantChecker = new InvariantChecker(this.store);
+
+        // Expose store fields for backward compatibility
+        this.events = this.store.events;
+        this.errors = this.store.errors;
+        this.causality = this.store.causality;
+        this.stackTraces = this.store.stackTraces;
+        this.performanceMarks = this.store.performanceMarks;
+        this.runtimeViolations = this.store.runtimeViolations;
+        this.violationsReported = this.store.violationsReported;
+        this.maxEvents = this.store.maxEvents;
+        this.maxMaps = this.store.maxMaps;
+        this.currentContext = this.store.currentContext;
+
+        // Expose causalAnalysis fields for backward compatibility
+        this.markovChain = this.causalAnalysis.markovChain;
+        this.failurePatterns = this.causalAnalysis.failurePatterns;
+
+        // Expose telemetryExporter field for backward compatibility
+        this.lazyTelemetry = null;
+
         this.setupPeriodicCleanup();
     }
     
@@ -3967,14 +4536,12 @@ class CausalDebugger {
                 timestamp,
                 eventId
             }, `trace-${eventId}`);
-            
-            // Generate deterministic causal hash
-            const causalHash = processingCoordinator.generateContentHash(
-                `causal-${event}`,
-                processingCoordinator.state.get(`trace-${eventId}`)
-            );
-            
-            context.causalHash = causalHash;
+
+            const hasher = crypto.createHash(CONFIG.strings.mainHashAlgorithm);
+            hasher.update(event);
+            hasher.update(eventId.toString());
+            hasher.update(timestamp.toString());
+            context.causalHash = hasher.digest(CONFIG.strings.hashEncoding);
         }
         
         // Use existing ConfigPatternValidator to check for violations
@@ -3995,27 +4562,15 @@ class CausalDebugger {
             timestamp,
             stack: stack.split('\n').slice(2, CONFIG.debug.stackFrameEnd),
             memory: process.memoryUsage(),
-            parent: this.currentContext ? this.currentContext.id : null
+            parent: this.store.currentContext ? this.store.currentContext.id : null
         };
-        
-        this.events.push(tracedEvent);
-        
-        if (this.events.length > this.maxEvents) {
-            this.events = this.events.slice(-this.maxEvents);
-        }
-        
-        if (this.currentContext) {
-            if (!this.causality.has(this.currentContext.id)) {
-                this.causality.set(this.currentContext.id, []);
-            }
-            this.causality.get(this.currentContext.id).push(eventId);
-        }
+
+        this.store.append(tracedEvent);
         
         // Update Markov chain for prediction
-        if (this.currentContext) {
-            this.updateMarkovChain(this.currentContext.event, event);
-            
-            // Check for likely failures
+        if (this.store.currentContext) {
+            this.updateMarkovChain(this.store.currentContext.event, event);
+
             const predictions = this.predictNext(event);
             if (predictions.some(p => p.event.includes('ERROR') && p.probability > CONFIG.prediction.failureThreshold)) {
                 lazyEvents.emit({
@@ -4025,125 +4580,64 @@ class CausalDebugger {
                 });
             }
         }
-        
-        this.currentContext = tracedEvent;
-        
+
         return eventId;
     }
     
     updateMarkovChain(fromEvent, toEvent) {
-        if (!this.markovChain.has(fromEvent)) {
-            this.markovChain.set(fromEvent, new Map());
-        }
-        
-        const transitions = this.markovChain.get(fromEvent);
-        const count = Maybe.elim(
-            () => 'Maybe',
-            () => 0,
-            c => c
-        )(transitions.get(toEvent));
-        transitions.set(toEvent, count + 1);
-        
-        // Detect failure patterns
-        if (toEvent.includes('ERROR')) {
-            const pattern = `${fromEvent} -> ${toEvent}`;
-            const occurrences = transitions.get(toEvent);
-            const total = Array.from(transitions.values()).reduce((a, b) => a + b, 0);
-            const probability = occurrences / total;
-            
-            this.failurePatterns.set(pattern, probability);
-        }
+        return this.causalAnalysis.updateMarkovChain(fromEvent, toEvent);
     }
-    
+
     predictNext(currentEvent) {
-        if (!this.markovChain.has(currentEvent)) {
-            return [];
-        }
-        
-        const transitions = this.markovChain.get(currentEvent);
-        const total = Array.from(transitions.values()).reduce((a, b) => a + b, 0);
-        
-        return Array.from(transitions.entries())
-            .map(([event, count]) => ({
-                event,
-                probability: count / total
-            }))
-            .sort((a, b) => b.probability - a.probability)
-            .slice(0, 5);
+        return this.causalAnalysis.predictNext(currentEvent);
     }
-    
+
     getFailureProbability(event) {
-        const predictions = this.predictNext(event);
-        return predictions
-            .filter(p => p.event.includes('ERROR'))
-            .reduce((sum, p) => sum + p.probability, 0);
+        return this.causalAnalysis.getFailureProbability(event);
     }
     
     cleanupMaps() {
-        const maxSize = this.maxMaps;
-        
-        const trimMap = (map) => {
-            if (map.size > maxSize) {
-                const toDelete = map.size - maxSize;
-                const keys = Array.from(map.keys()).slice(0, toDelete);
-                keys.forEach(k => map.delete(k));
-            }
-        };
-        
-        trimMap(this.errors);
-        trimMap(this.causality);
-        trimMap(this.stackTraces);
-        trimMap(this.performanceMarks);
+        this.store.cleanup();
     }
     
     error(error, context = {}) {
         const errorId = this.trace(`ERROR: ${error.message}`, context);
-        
-        // Capture full causal chain
-        const causalChain = this.getCausalChain(errorId);
-        
-        this.errors.set(errorId, {
+
+        const causalChain = this.store.getCausalChain(errorId);
+
+        this.store.errors.set(errorId, {
             error,
             context,
             causalChain,
             timestamp: Date.now(),
             stack: error.stack
         });
-        
-        // Log with full context
+
         console.error(`[ERROR ${errorId}] ${error.message}`);
         console.error('Causal chain:', causalChain.map(e => `${e.event} (${e.timestamp})`).join(' -> '));
-        
+
         return errorId;
     }
-    
+
     getCausalChain(eventId) {
-        const chain = [];
-        let current = this.events.find(e => e.id === eventId);
-        
-        while (current) {
-            chain.unshift(current);
-            current = current.parent ? this.events.find(e => e.id === current.parent) : null;
-        }
-        
-        return chain;
+        return this.store.getCausalChain(eventId);
     }
     
     async performance(label, fn) {
         const start = performance.now();
         const startMem = process.memoryUsage();
-        
+
         try {
             const result = await fn();
             const duration = performance.now() - start;
             const memDelta = process.memoryUsage().heapUsed - startMem.heapUsed;
-            
-            this.performanceMarks.set(label, { duration, memDelta, timestamp: Date.now() });
-            
+
+            this.store.performanceMarks.set(label, { duration, memDelta, timestamp: Date.now() });
+
             if (duration > CONFIG.debug.performanceWarnThreshold) {
                 console.warn(`[PERF] ${label} took ${duration.toFixed(2)}ms`);
             }
-            
+
             return result;
         } catch (error) {
             this.error(error, { label, performance: true });
@@ -4151,696 +4645,141 @@ class CausalDebugger {
         }
     }
     
-    // NEW: Expose metrics for BuildScheduler priority decisions
     getMetrics() {
-        const recentEvents = this.events.slice(-CONFIG.debug.analysis.recentWindowSize);
-        const recentErrors = Array.from(this.errors.values()).slice(-CONFIG.debug.analysis.errorWindowSize);
-        
-        return {
-            eventRate: this.calculateEventRate(recentEvents),
-            errorRate: this.calculateErrorRate(recentErrors),
-            memoryPressure: this.calculateMemoryPressure(),
-            performanceBottlenecks: this.identifyBottlenecks(),
-            taskSuccess: this.calculateTaskSuccessRate()
-        };
+        return this.metricsCalculator.getMetrics();
     }
     
-    // NEW: Performance profile for DocumentProcessor optimization
     getPerformanceProfile() {
-        const profiles = new Map();
-        
-        for (const [label, data] of this.performanceMarks) {
-            const category = this.categorizeOperation(label);
-            if (!profiles.has(category)) {
-                profiles.set(category, { count: 0, totalTime: 0, totalMemory: 0, operations: [] });
-            }
-            const profile = profiles.get(category);
-            profile.count++;
-            profile.totalTime += data.duration;
-            profile.totalMemory += data.memDelta;
-            profile.operations.push({ label, ...data });
-        }
-        
-        return Array.from(profiles.entries()).map(([category, data]) => ({
-            category,
-            avgTime: data.totalTime / data.count,
-            avgMemory: data.totalMemory / data.count,
-            ...data
-        }));
+        return this.metricsCalculator.getPerformanceProfile();
     }
     
-    // NEW: Critical path analysis for bottleneck identification
     getCriticalPath() {
-        const paths = [];
-        
-        // Find all error events and trace their paths
-        for (const [errorId, errorData] of this.errors) {
-            const chain = errorData.causalChain;
-            if (!chain || chain.length === 0) continue;
-            const duration = chain.length > 1 ? chain[chain.length - 1].timestamp - chain[0].timestamp : 0;
-            paths.push({
-                errorId,
-                duration,
-                steps: chain.length,
-                path: chain.map(e => e.event)
-            });
-        }
-        
-        // Sort by duration to find longest paths
-        return paths.sort((a, b) => b.duration - a.duration).slice(0, CONFIG.debug.analysis.topResultsLimit);
+        return this.metricsCalculator.getCriticalPath();
     }
     
-    // NEW: Pattern detection for predictive scheduling
     detectPatterns() {
-        const patterns = {
-            memoryLeaks: this.detectMemoryLeaks(),
-            performanceDegradation: this.detectPerformanceDegradation(),
-            errorClusters: this.detectErrorClusters(),
-            resourceSpikes: this.detectResourceSpikes()
-        };
-        
-        return patterns;
+        return this.metricsCalculator.detectPatterns();
     }
-    
-    // Helper methods for metrics calculation
+
     calculateEventRate(events) {
-        if (events.length < 2) return 0;
-        const timeSpan = events[events.length - 1].timestamp - events[0].timestamp;
-        return timeSpan > 0 ? (events.length / timeSpan) * CONFIG.core.time.msPerSecond : 0;
+        return this.metricsCalculator.calculateEventRate(events);
     }
-    
+
     calculateErrorRate(errors) {
-        if (errors.length === 0) return 0;
-        const timeSpan = Date.now() - errors[0].timestamp;
-        return timeSpan > 0 ? (errors.length / timeSpan) * CONFIG.core.time.msPerSecond : 0;
+        return this.metricsCalculator.calculateErrorRate(errors);
     }
-    
+
     calculateMemoryPressure() {
-        const recent = this.events.slice(-CONFIG.process.lockRetryAttempts);
-        if (recent.length === 0) return 0;
-        
-        const avgHeap = recent.reduce((sum, e) => sum + e.memory.heapUsed, 0) / recent.length;
-        const heapLimit = process.memoryUsage().heapTotal;
-        return avgHeap / heapLimit;
+        return this.metricsCalculator.calculateMemoryPressure();
     }
-    
+
     identifyBottlenecks() {
-        const slowOps = [];
-        for (const [label, data] of this.performanceMarks) {
-            if (data.duration > CONFIG.debug.performanceWarnThreshold) {
-                slowOps.push({ label, duration: data.duration });
-            }
-        }
-        return slowOps.sort((a, b) => b.duration - a.duration).slice(0, CONFIG.debug.analysis.topResultsLimit);
+        return this.metricsCalculator.identifyBottlenecks();
     }
-    
+
     calculateTaskSuccessRate() {
-        const taskEvents = this.events.filter(e => e.event.includes(CONFIG.strings.operationCategories[CONFIG.strings.operationCategories.length - 1]));
-        const errorEvents = Array.from(this.errors.values());
-        
-        if (taskEvents.length === 0) return 1;
-        const failureCount = errorEvents.filter(e => e.context.task).length;
-        return 1 - (failureCount / taskEvents.length);
+        return this.metricsCalculator.calculateTaskSuccessRate();
     }
-    
+
     categorizeOperation(label) {
-        for (const category of CONFIG.strings.operationCategories) {
-            if (label.includes(category)) return category;
-        }
-        return CONFIG.strings.defaultCategory;
+        return this.metricsCalculator.categorizeOperation(label);
+    }
+
+    detectMemoryLeaks() {
+        return this.patternDetection.detectMemoryLeaks();
+    }
+
+    detectPerformanceDegradation() {
+        return this.patternDetection.detectPerformanceDegradation();
+    }
+
+    detectErrorClusters() {
+        return this.patternDetection.detectErrorClusters();
+    }
+
+    detectResourceSpikes() {
+        return this.patternDetection.detectResourceSpikes();
+    }
+
+    categorizeOperation(label) {
+        return this.metricsCalculator.categorizeOperation(label);
     }
     
     detectMemoryLeaks() {
-        const memoryTrend = this.events.slice(-CONFIG.debug.analysis.memoryTrendSize).map(e => e.memory.heapUsed);
-        if (memoryTrend.length < CONFIG.process.lockRetryAttempts) return false;
-        
-        // Simple linear regression to detect upward trend
-        const n = memoryTrend.length;
-        const indices = Array.from({ length: n }, (_, i) => i);
-        const sumX = indices.reduce((a, b) => a + b, 0);
-        const sumY = memoryTrend.reduce((a, b) => a + b, 0);
-        const sumXY = indices.reduce((sum, x, i) => sum + x * memoryTrend[i], 0);
-        const sumX2 = indices.reduce((sum, x) => sum + x * x, 0);
-        
-        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-        return slope > CONFIG.processor.largeSizeThreshold;
+        return this.patternDetection.detectMemoryLeaks();
     }
     
     detectPerformanceDegradation() {
-        const recent = Array.from(this.performanceMarks.values()).slice(-CONFIG.debug.analysis.performanceSampleSize);
-        if (recent.length < CONFIG.process.lockRetryAttempts) return false;
-        
-        const halfPoint = Math.floor(recent.length / 2);
-        const firstHalf = recent.slice(0, halfPoint);
-        const secondHalf = recent.slice(halfPoint);
-        
-        const avgFirst = firstHalf.reduce((sum, d) => sum + d.duration, 0) / firstHalf.length;
-        const avgSecond = secondHalf.reduce((sum, d) => sum + d.duration, 0) / secondHalf.length;
-        
-        return avgSecond > avgFirst * 2;
+        return this.patternDetection.detectPerformanceDegradation();
     }
     
     detectErrorClusters() {
-        const errors = Array.from(this.errors.values());
-        if (errors.length < CONFIG.processor.minGroupSize) return [];
-        
-        const clusters = [];
-        let currentCluster = [errors[0]];
-        
-        for (let i = 1; i < errors.length; i++) {
-            const timeDiff = errors[i].timestamp - errors[i - 1].timestamp;
-            if (timeDiff < TIME.SECOND) { // Within 1 second
-                currentCluster.push(errors[i]);
-            } else {
-                if (currentCluster.length >= CONFIG.processor.minGroupSize) {
-                    clusters.push(currentCluster);
-                }
-                currentCluster = [errors[i]];
-            }
-        }
-        
-        if (currentCluster.length >= CONFIG.processor.minGroupSize) {
-            clusters.push(currentCluster);
-        }
-        
-        return clusters;
+        return this.patternDetection.detectErrorClusters();
     }
     
     detectResourceSpikes() {
-        const spikes = [];
-        const memoryData = this.events.map(e => ({ timestamp: e.timestamp, heap: e.memory.heapUsed }));
-        
-        for (let i = 1; i < memoryData.length; i++) {
-            const delta = memoryData[i].heap - memoryData[i - 1].heap;
-            if (delta > CONFIG.processor.largeSizeThreshold * 50) { // 50MB spike
-                spikes.push({
-                    timestamp: memoryData[i].timestamp,
-                    delta,
-                    event: this.events[i].event
-                });
-            }
-        }
-        
-        return spikes;
+        return this.patternDetection.detectResourceSpikes();
     }
     
     // Initialize lazy telemetry system
     initializeLazyTelemetry() {
-        this.lazyTelemetry = new Lazy(() => ({
-            // Core metrics - only computed when pulled
-            metrics: new Lazy(() => this.getMetrics()),
-            
-            // Performance profile - expensive computation deferred
-            profile: new Lazy(() => this.getPerformanceProfile()),
-            
-            // Pattern detection - AI-like analysis only when needed
-            patterns: new Lazy(() => this.detectPatterns()),
-            
-            // System state - snapshot only when accessed
-            system: new Lazy(() => ({
-                memory: process.memoryUsage(),
-                cpu: process.cpuUsage(),
-                platform: process.platform,
-                nodeVersion: process.version,
-                pid: process.pid,
-                uptime: Date.now() - (this.events[0]?.timestamp || Date.now())
-            })),
-            
-            // Event statistics - computed lazily
-            events: new Lazy(() => {
-                const now = Date.now();
-                return {
-                    total: this.events.length,
-                    rate: this.calculateEventRate(this.events),
-                    recentCount: this.events.filter(e => now - e.timestamp < TIME.VERY_LONG).length,
-                    oldestTimestamp: this.events[0]?.timestamp || null,
-                    newestTimestamp: this.events[this.events.length - 1]?.timestamp || null,
-                    // Stream of recent events
-                    recent: new LazyStream(
-                        this.events[this.events.length - 1] || null,
-                        () => this.events.length > 1 
-                            ? new LazyStream(this.events[this.events.length - 2], null)
-                            : null
-                    )
-                };
-            }),
-            
-            // Error analysis - expensive clustering deferred
-            errors: new Lazy(() => ({
-                total: this.errors.size,
-                rate: this.calculateErrorRate(Array.from(this.errors.values())),
-                recent: new Lazy(() => 
-                    Array.from(this.errors.values())
-                        .filter(e => Date.now() - e.timestamp < TIME.VERY_LONG)
-                        .map(e => ({
-                            message: e.error.message,
-                            timestamp: e.timestamp,
-                            context: e.context,
-                            chainLength: e.causalChain.length
-                        }))
-                ),
-                clusters: new Lazy(() => 
-                    this.detectErrorClusters().map(cluster => ({
-                        size: cluster.length,
-                        startTime: cluster[0].timestamp,
-                        endTime: cluster[cluster.length - 1].timestamp,
-                        types: [...new Set(cluster.map(e => e.error.message.split(':')[0]))]
-                    }))
-                )
-            })),
-            
-            // Performance metrics - heavy computation deferred
-            performance: new Lazy(() => ({
-                marks: this.performanceMarks.size,
-                profile: new Lazy(() => this.getPerformanceProfile()),
-                bottlenecks: new Lazy(() => this.identifyBottlenecks()),
-                criticalPaths: new Lazy(() => this.getCriticalPath()),
-                slowestOperations: new Lazy(() => 
-                    Array.from(this.performanceMarks.entries())
-                        .sort((a, b) => b[1].duration - a[1].duration)
-                        .slice(0, CONFIG.process.lockRetryAttempts)
-                        .map(([label, data]) => ({
-                            label,
-                            duration: data.duration,
-                            memory: data.memDelta,
-                            timestamp: data.timestamp
-                        }))
-                )
-            })),
-            
-            // Causality chains - graph traversal deferred
-            causality: new Lazy(() => ({
-                chains: this.causality.size,
-                maxChainLength: new Lazy(() => 
-                    Math.max(...Array.from(this.causality.values()).map(c => c.length), 0)
-                ),
-                orphanEvents: new Lazy(() => 
-                    this.events.filter(e => !e.parent && !this.causality.has(e.id)).length
-                ),
-                graph: new Lazy(() => this.buildCausalityGraph())
-            })),
-            
-            // External systems - only query when needed
-            scheduler: new Lazy(() => 
-                (typeof scheduler !== 'undefined' && scheduler) ? {
-                    queued: scheduler.queue.length,
-                    running: scheduler.running.size,
-                    locked: scheduler.locks.size,
-                    history: new Lazy(() => 
-                        Array.from(scheduler.buildHistory.entries()).map(([file, stats]) => ({
-                            file,
-                            success: stats.success,
-                            failure: stats.failure,
-                            successRate: (stats.success + stats.failure) > 0 
-                                ? stats.success / (stats.success + stats.failure) 
-                                : 0
-                        }))
-                    )
-                } : null
-            ),
-            
-            processor: new Lazy(() => 
-                (typeof processor !== 'undefined' && processor?.state) ? {
-                    browser: processor.state.browser !== null,
-                    pages: processor.state.pages.size,
-                    hashes: processor.state.hashes.size,
-                    building: processor.state.building.size,
-                    errors: processor.state.errors.length,
-                    builds: processor.state.stats.builds,
-                    uptime: Date.now() - processor.state.stats.uptime
-                } : null
-            ),
-            
-            // Export function - only serialize when actually needed
-            export: new Lazy(() => {
-                const timestamp = Date.now();
-                
-                // Use LazyFunctor to extract values intelligently
-                const data = LazyFunctor.extract({
-                    timestamp,
-                    system: this.lazyTelemetry.value.system,
-                    events: this.lazyTelemetry.value.events,
-                    errors: this.lazyTelemetry.value.errors,
-                    performance: this.lazyTelemetry.value.performance,
-                    causality: this.lazyTelemetry.value.causality,
-                    patterns: this.lazyTelemetry.value.patterns,
-                    metrics: this.lazyTelemetry.value.metrics,
-                    scheduler: this.lazyTelemetry.value.scheduler,
-                    processor: this.lazyTelemetry.value.processor
-                });
-                
-                return {
-                    timestamp,
-                    data,
-                    json: new Lazy(() => JSON.stringify(data, null, 2)),
-                    metrics: new Lazy(() => this.formatMetrics(data)),
-                    timeseries: new Lazy(() => this.formatTimeseries(data))
-                };
-            })
-        }));
-        
+        this.lazyTelemetry = this.telemetryExporter.initializeLazyTelemetry();
         return this.lazyTelemetry;
     }
     
     // Build causality graph for visualization
     buildCausalityGraph() {
-        const nodes = new Map();
-        const edges = [];
-        
-        this.causality.forEach((chain, id) => {
-            chain.forEach((event, index) => {
-                nodes.set(event.id, event);
-                if (index > 0) {
-                    edges.push({
-                        from: chain[index - 1].id,
-                        to: event.id,
-                        weight: event.timestamp - chain[index - 1].timestamp
-                    });
-                }
-            });
-        });
-        
-        return { nodes: Array.from(nodes.values()), edges };
+        return this.causalAnalysis.buildCausalityGraph();
     }
     
-    // Create infinite telemetry stream
     createTelemetryStream() {
-        // Initialize lazy telemetry if not already done
-        if (!this.lazyTelemetry) {
-            this.initializeLazyTelemetry();
-        }
-        
-        // Create infinite stream of telemetry snapshots
-        const telemetryStream = fix(stream => 
-            new LazyStream(
-                new Lazy(() => ({
-                    timestamp: Date.now(),
-                    snapshot: this.lazyTelemetry.value.export.value.data
-                })),
-                () => {
-                    // Generate next telemetry snapshot after interval
-                    return new Lazy(() => {
-                        // Only compute if someone is pulling
-                        return new PullPromise(async () => {
-                            await new Promise(resolve => 
-                                setTimeout(resolve, CONFIG.watcher.interval || TIME.TICK.value)
-                            );
-                            return stream.value;
-                        });
-                    });
-                }
-            )
-        );
-        
-        // Add stream operations for telemetry analysis
-        telemetryStream.deltaMetrics = new Lazy(() => telemetryStream.value
-            .window(2)
-            .map(window => {
-                if (window.length < 2) return null;
-                const [prev, curr] = window;
-                return {
-                    timestamp: curr.timestamp,
-                    timeDelta: curr.timestamp - prev.timestamp,
-                    eventDelta: curr.snapshot.events.total - prev.snapshot.events.total,
-                    errorDelta: curr.snapshot.errors.total - prev.snapshot.errors.total,
-                    memoryDelta: curr.snapshot.system.memory.heapUsed - prev.snapshot.system.memory.heapUsed
-                };
-            })
-            .filter(delta => delta !== null));
-        
-        // Anomaly detection stream
-        telemetryStream.anomalies = new Lazy(() => telemetryStream.value
-            .map(snapshot => {
-                const anomalies = [];
-                
-                // High error rate
-                if (snapshot.snapshot.errors.rate > CONFIG.core.limits.defaultLimit) {
-                    anomalies.push({
-                        type: 'HIGH_ERROR_RATE',
-                        value: snapshot.snapshot.errors.rate,
-                        timestamp: snapshot.timestamp
-                    });
-                }
-                
-                // Memory pressure
-                const memoryPressure = snapshot.snapshot.system.memory.heapUsed / 
-                                      snapshot.snapshot.system.memory.heapTotal;
-                const threshold = CONFIG.core.limits.memoryPressureThreshold;
-                if (memoryPressure > (threshold instanceof Lazy ? threshold.value : threshold)) {
-                    anomalies.push({
-                        type: 'HIGH_MEMORY_PRESSURE',
-                        value: memoryPressure,
-                        timestamp: snapshot.timestamp
-                    });
-                }
-                
-                // Event spike detection
-                const maxRate = CONFIG.core.limits.maxEventRate;
-                if (snapshot.snapshot.events.rate > (maxRate instanceof Lazy ? maxRate.value : maxRate)) {
-                    anomalies.push({
-                        type: 'EVENT_SPIKE',
-                        value: snapshot.snapshot.events.rate,
-                        timestamp: snapshot.timestamp
-                    });
-                }
-                
-                return anomalies.length > 0 ? { timestamp: snapshot.timestamp, anomalies } : null;
-            })
-            .filter(anomaly => anomaly !== null));
-        
-        // Aggregate metrics over time windows
-        telemetryStream.aggregates = new Lazy(() => telemetryStream.value
-            .window(CONFIG.process.lockRetryAttempts || CONFIG.core.limits.aggregateWindowSize)
-            .map(window => ({
-                timestamp: Date.now(),
-                windowSize: window.length,
-                avgEventRate: window.reduce((sum, s) => sum + s.snapshot.events.rate, 0) / window.length,
-                avgErrorRate: window.reduce((sum, s) => sum + s.snapshot.errors.rate, 0) / window.length,
-                maxMemory: Math.max(...window.map(s => s.snapshot.system.memory.heapUsed)),
-                minMemory: Math.min(...window.map(s => s.snapshot.system.memory.heapUsed))
-            })));
-        
-        return telemetryStream;
+        return this.telemetryExporter.createTelemetryStream();
     }
     
-    // Export telemetry for external monitoring systems (backward compatibility)
     exportTelemetry() {
-        // Initialize lazy telemetry if not already done
-        if (!this.lazyTelemetry) {
-            this.initializeLazyTelemetry();
-        }
-        
-        // Pull the export lazy - this triggers computation chain
-        const exported = this.lazyTelemetry.value.export.value;
-        
-        return {
-            raw: exported.data,
-            metrics: exported.metrics.value,
-            timeseries: exported.timeseries.value,
-            json: exported.json.value
-        };
+        return this.telemetryExporter.exportTelemetry();
     }
     
-    // Format telemetry as standard metrics
     formatMetrics(telemetry) {
-        const metrics = [];
-        
-        // Gauges
-        metrics.push(`# HELP hct_events_total Total number of events`);
-        metrics.push(`# TYPE hct_events_total gauge`);
-        metrics.push(`hct_events_total ${telemetry.events.total}`);
-        
-        metrics.push(`# HELP hct_events_rate Events per second`);
-        metrics.push(`# TYPE hct_events_rate gauge`);
-        metrics.push(`hct_events_rate ${telemetry.events.rate.toFixed(2)}`);
-        
-        metrics.push(`# HELP hct_errors_total Total number of errors`);
-        metrics.push(`# TYPE hct_errors_total counter`);
-        metrics.push(`hct_errors_total ${telemetry.errors.total}`);
-        
-        metrics.push(`# HELP hct_memory_heap_used_bytes Heap memory used`);
-        metrics.push(`# TYPE hct_memory_heap_used_bytes gauge`);
-        metrics.push(`hct_memory_heap_used_bytes ${telemetry.system.memory.heapUsed}`);
-        
-        metrics.push(`# HELP hct_memory_pressure Memory pressure ratio`);
-        metrics.push(`# TYPE hct_memory_pressure gauge`);
-        metrics.push(`hct_memory_pressure ${telemetry.metrics.memoryPressure.toFixed(3)}`);
-        
-        // Histograms for performance
-        telemetry.performance.profile.forEach(profile => {
-            metrics.push(`# HELP hct_operation_duration_ms Operation duration by category`);
-            metrics.push(`# TYPE hct_operation_duration_ms histogram`);
-            metrics.push(`hct_operation_duration_ms{category="${profile.category}"} ${profile.avgTime.toFixed(2)}`);
-        });
-        
-        // Scheduler metrics
-        if (telemetry.scheduler) {
-            metrics.push(`# HELP hct_scheduler_queue_size Number of queued tasks`);
-            metrics.push(`# TYPE hct_scheduler_queue_size gauge`);
-            metrics.push(`hct_scheduler_queue_size ${telemetry.scheduler.queued}`);
-            
-            metrics.push(`# HELP hct_scheduler_running_tasks Number of running tasks`);
-            metrics.push(`# TYPE hct_scheduler_running_tasks gauge`);
-            metrics.push(`hct_scheduler_running_tasks ${telemetry.scheduler.running}`);
-        }
-        
-        // Processor metrics
-        if (telemetry.processor) {
-            metrics.push(`# HELP hct_processor_builds_total Total builds completed`);
-            metrics.push(`# TYPE hct_processor_builds_total counter`);
-            metrics.push(`hct_processor_builds_total ${telemetry.processor.builds}`);
-            
-            metrics.push(`# HELP hct_processor_pages_open Number of browser pages open`);
-            metrics.push(`# TYPE hct_processor_pages_open gauge`);
-            metrics.push(`hct_processor_pages_open ${telemetry.processor.pages}`);
-        }
-        
-        return metrics.join('\n');
+        return this.telemetryExporter.formatMetrics(telemetry);
     }
     
-    // Format telemetry as timeseries data
     formatTimeseries(telemetry) {
-        const metrics = [];
-        const tags = [`env:${process.env.NODE_ENV || 'development'}`, `pid:${telemetry.system.pid}`];
-        
-        metrics.push({
-            metric: 'hct.events.total',
-            points: [[Math.floor(telemetry.timestamp / CONFIG.core.time.msPerSecond), telemetry.events.total]],
-            type: 'gauge',
-            tags
-        });
-        
-        metrics.push({
-            metric: 'hct.events.rate',
-            points: [[Math.floor(telemetry.timestamp / CONFIG.core.time.msPerSecond), telemetry.events.rate]],
-            type: 'gauge',
-            tags
-        });
-        
-        metrics.push({
-            metric: 'hct.errors.total',
-            points: [[Math.floor(telemetry.timestamp / CONFIG.core.time.msPerSecond), telemetry.errors.total]],
-            type: 'count',
-            tags
-        });
-        
-        metrics.push({
-            metric: 'hct.memory.heap.used',
-            points: [[Math.floor(telemetry.timestamp / CONFIG.core.time.msPerSecond), telemetry.system.memory.heapUsed]],
-            type: 'gauge',
-            tags
-        });
-        
-        // Add performance metrics
-        telemetry.performance.profile.forEach(profile => {
-            metrics.push({
-                metric: `hct.operation.duration`,
-                points: [[Math.floor(telemetry.timestamp / CONFIG.core.time.msPerSecond), profile.avgTime]],
-                type: 'gauge',
-                tags: [...tags, `category:${profile.category}`]
-            });
-        });
-        
-        return { series: metrics };
+        return this.telemetryExporter.formatTimeseries(telemetry);
     }
 }
 
-causalDebugger = new CausalDebugger();
-
-// Create proof system with deferred validation
-proofSystem = new ProofSystem();
-proofSystem.initializeUniverses(Lazy, 0, 1, 2, 3);
-const ProofTracer = lazyProofTracer.value;
-proofTracer = new ProofTracer();
+traceOrchestrator = new TraceOrchestrator();
 
 // Define inductive types for error handling and optional values
-const Maybe = new InductiveType('Maybe', [
+const Maybe = new SumType('Maybe', [
     { name: 'Nothing', matches: v => v === null || v === undefined },
     { name: 'Just', matches: v => v !== null && v !== undefined }
 ]);
 
-const Result = new InductiveType('Result', [
+const Result = new SumType('Result', [
     { name: 'Ok', matches: v => v && !v.error },
     { name: 'Err', matches: v => v && v.error }
 ]);
 
-// Initialize proof system components for validation
-const extractor = new Extractor();
+const stateSerializer = new StateSerializer();
 const reflection = new Reflection();
-
-// Base types for DependentType validation
-const NumberType = { contains: v => typeof v === 'number' };
-const StringType = { contains: v => typeof v === 'string' };
-const BoolType = { contains: v => typeof v === 'boolean' };
-const ArrayType = { contains: v => Array.isArray(v) };
-
-// Refinement types for CONFIG validation
-const PositiveInt = Refinement(NumberType, n => n > 0 && Number.isInteger(n));
-const NonNegativeInt = Refinement(NumberType, n => n >= 0 && Number.isInteger(n));
-const ValidPath = Refinement(StringType, p => {
-    try {
-        return fs.existsSync(p);
-    } catch {
-        return false;
-    }
-});
-const NonEmptyString = Refinement(StringType, s => s.length > 0);
-
-// Validate CONFIG paths at startup
-const validateConfigPaths = () => {
-    const paths = [
-        CONFIG.documents.artifacts.workingDoc.txt,
-        CONFIG.documents.artifacts.primerDoc.txt
-    ];
-
-    paths.forEach(p => {
-        try {
-            ValidPath.apply(p);
-            proofSystem.prove(p, 'PATH_VALID', [p]);
-        } catch (e) {
-            console.warn(`[CONFIG] Invalid path: ${p}`);
-        }
-    });
-};
-
-// Validate CONFIG numeric constraints
-const validateConfigNumbers = () => {
-    const checks = [
-        [CONFIG.processing.polling.intervalMs, 'polling.intervalMs'],
-        [CONFIG.processing.content.maxHeadingLevel, 'content.maxHeadingLevel'],
-        [CONFIG.processing.content.minGroupSize, 'content.minGroupSize'],
-        [CONFIG.processing.hash.byteLength, 'hash.byteLength']
-    ];
-
-    checks.forEach(([value, name]) => {
-        try {
-            PositiveInt.apply(value);
-            proofSystem.prove(value, 'CONFIG_VALID', [name]);
-        } catch (e) {
-            console.error(`[CONFIG] Invalid ${name}: ${value}`);
-        }
-    });
-};
-
-// File existence checking tactic
-const checkInputsExist = new Tactic('checkInputs', (state) => {
-    const missing = state.inputs.filter(f => !fs.existsSync(f));
-    if (missing.length > 0) {
-        throw new Error(`Missing inputs: ${missing.join(', ')}`);
-    }
-    return { ...state, proven: true };
+const taskValidator = new SchemaValidator({
+    validPath: ValidPath,
+    array: ArrayType
 });
 
-// Extractors for socket queries
-extractor.register('proofSystem', (ps) => ({
-    totalProofs: ps.proofs.size,
-    universes: ps.universes.size
-}));
-
-extractor.register('scheduler', (sched) => ({
+// serializers for debug socket queries
+stateSerializer.register('scheduler', (sched) => ({
     queue: sched.queue.length,
     running: Array.from(sched.running).map(t => t.name),
     history: sched.buildHistory.size
+}));
+
+stateSerializer.register('traceOrchestrator', (trace) => ({
+    events: trace.events.length,
+    violations: trace.runtimeViolations.size,
+    metrics: trace.metricsCalculator ? trace.metricsCalculator.getMetrics() : {}
 }));
 
 // BUILD SCHEDULER
@@ -4889,27 +4828,26 @@ class ProcessingCoordinator {
             orchestrators: new Map([
                 ['BuildScheduler', null],
                 ['ProcessLockManager', null],
-                ['CausalDebugger', causalDebugger], // Already exists
+                ['TraceOrchestrator', traceOrchestrator],
                 ['ConfigValidator', null]
             ]),
             
             // Core systems
             systems: new Map([
-                ['ProofSystem', proofSystem],
                 ['PullGraph', pullGraph],
-                ['Extractor', extractor],
+                ['StateSerializer', stateSerializer],
                 ['Reflection', reflection]
             ])
         };
         
         // Execution lanes for REAL components
         this.executionLanes = {
-            pure: ['ConfigValidator', 'ConfigPatternValidator', 'Tactic', 'Extractor'],
+            pure: ['ConfigValidator', 'ConfigPatternValidator', 'SchemaValidator', 'StateSerializer'],
             io: ['buildFile', 'generatePDF', 'watch', 'discoverDocumentFiles'],
             state: ['ProcessingCoordinator', 'BuildScheduler', 'ProcessLockManager'],
             async: ['generatePDF', 'buildFile', 'watch'],
             transform: ['DocumentProcessor', 'LaTeXProcessor', 'HTMLModality', 'MarkdownModality'],
-            ...this.processingPaths // Include existing processing paths as lanes
+            ...this.processingPaths
         };
         
         this.happensBefore = new Map(); // a -> Set<b> where a must happen before b
@@ -4920,7 +4858,6 @@ class ProcessingCoordinator {
         
         // Hook into global systems (when they exist)
         this.pullGraph = typeof pullGraph !== 'undefined' ? pullGraph : null;
-        this.proofSystem = typeof proofSystem !== 'undefined' ? proofSystem : null;
         
         // Setup REAL dependencies for THIS FILE
         this.setupRealDependencies();
@@ -4946,7 +4883,7 @@ class ProcessingCoordinator {
                     timestamp: Date.now()
                 });
                 
-                causalDebugger.trace('PROCESSING_CONFLICT', {
+                traceOrchestrator.trace('PROCESSING_CONFLICT', {
                     content: content.substring(0, 50),
                     owner,
                     challenger: processor
@@ -5064,11 +5001,10 @@ class ProcessingCoordinator {
         
         // Absorb component into sponge state
         if (component === this) {
-            // Self-registration - absorb our own methods as capabilities
             this.absorb({
                 absorb: this.absorb.bind(this),
-                squeeze: this.squeeze.bind(this),
-                permute: this.permute.bind(this)
+                contentHash: this.contentHash.bind(this),
+                buildSponge: this.buildSponge.bind(this)
             }, 'self');
             
             // Connect to pull graph dependencies
@@ -5090,15 +5026,15 @@ class ProcessingCoordinator {
             name,
             instance: component,
             type: this.determineComponentType(component),
-            dependencies: component.dependencies || [],
-            provides: component.provides || [],
-            consumes: component.consumes || [],
-            lane: component.lane || this.determineExecutionLane(name),
-            linear: component.linear || false,
-            affine: component.affine || false,
-            mutex: component.mutex || [],
-            orderingConstraints: component.orderingConstraints || {},
-            
+            dependencies: component.dependencies ?? [],
+            provides: component.provides ?? [],
+            consumes: component.consumes ?? [],
+            lane: component.lane ?? this.determineExecutionLane(name),
+            linear: component.linear ?? false,
+            affine: component.affine ?? false,
+            mutex: component.mutex ?? [],
+            orderingConstraints: component.orderingConstraints ?? {},
+
             usedBy: new Set(),
             uses: new Set(),
             registeredAt: Date.now()
@@ -5135,15 +5071,16 @@ class ProcessingCoordinator {
             )(depReg);
         }
 
-        // Register ordering constraints
-        if (registration.orderingConstraints.before) {
-            for (const before of registration.orderingConstraints.before) {
-                this.addOrderingConstraint(registration.name, before);
+        if (registration.orderingConstraints) {
+            if (registration.orderingConstraints.before) {
+                for (const before of registration.orderingConstraints.before) {
+                    this.addOrderingConstraint(registration.name, before);
+                }
             }
-        }
-        if (registration.orderingConstraints.after) {
-            for (const after of registration.orderingConstraints.after) {
-                this.addOrderingConstraint(after, registration.name);
+            if (registration.orderingConstraints.after) {
+                for (const after of registration.orderingConstraints.after) {
+                    this.addOrderingConstraint(after, registration.name);
+                }
             }
         }
         
@@ -5183,7 +5120,7 @@ class ProcessingCoordinator {
     
     // Determine what type of component this is
     determineComponentType(component) {
-        const name = component.constructor?.name || component.name || '';
+        const name = component.constructor?.name || component.name;
         
         if (name.includes('Processor') || name.includes('Modality')) {
             return 'processor';
@@ -5192,8 +5129,7 @@ class ProcessingCoordinator {
             name.includes('Coordinator') || name.includes('Debugger')) {
             return 'orchestrator';
         }
-        if (name.includes('System') || name.includes('Proof') || 
-            name.includes('Extract') || name.includes('Bootstrap')) {
+        if (name.includes('Serializer')) {
             return 'system';
         }
         
@@ -5282,7 +5218,7 @@ class ProcessingCoordinator {
         
         // BuildScheduler depends on ProcessingCoordinator
         this.addDependency('BuildScheduler', 'ProcessingCoordinator');
-        this.addDependency('BuildScheduler', 'CausalDebugger');
+        this.addDependency('BuildScheduler', 'TraceOrchestrator');
         
         // buildFile depends on everything
         this.addDependency('buildFile', 'DocumentProcessor');
@@ -5293,22 +5229,12 @@ class ProcessingCoordinator {
         // watch depends on buildFile
         this.addDependency('watch', 'buildFile');
         this.addDependency('watch', 'ProcessLockManager');
-        
-        // ProofSystem is used by validators
-        this.addDependency('ConfigPatternValidator', 'ProofSystem');
-        this.addDependency('TypeChecker', 'ProofSystem');
-        
-        // Bootstrap depends on everything for self-verification
-        this.addDependency('Bootstrap', 'ProofSystem');
-        this.addDependency('Bootstrap', 'Extractor');
-        this.addDependency('Bootstrap', 'TACTICS');
-        
+
         // Setup ordering constraints as pipeline stages
         this.addOrderingConstraint('validateConfig', 'buildFile');
         this.addOrderingConstraint('DocumentProcessor', 'generatePDF');
         this.addOrderingConstraint('HTMLModality', 'PDFModality');
         this.addOrderingConstraint('ProcessLockManager', 'DocumentProcessor');
-        this.addOrderingConstraint('ProofSystem', 'ConfigPatternValidator');
         
         // Setup exclusive access (mutex groups)
         this.addMutexGroup(['DocumentProcessor', 'LaTeXProcessor', 'HTMLModality']);
@@ -5351,464 +5277,61 @@ class ProcessingCoordinator {
     }
     
     absorb(data, tag) {
-        // Wrap in Lazy if not already
-        const lazyData = data instanceof Lazy ? data : new Lazy(() => data);
-        
-        // Rate: data that flows through
-        this.rate.set(tag, lazyData);
-        
-        // Capacity: invariants that must be preserved (lazy)
-        if (!this.capacity.has('integrity')) {
-            this.capacity.set('integrity', new Lazy(() => ({
-                constructions: CONFIG.constructions || {},
-                limits: CONFIG.limits || {},
-                proofs: proofTrace
-            })));
+        // Sponge construction using Node crypto instead of manual Keccak
+        // Keep composable absorb/squeeze interface but delegate to crypto.createHash
+
+        if (!this.absorbed) {
+            this.absorbed = [];
         }
-        
-        // Mix rate into state while preserving capacity
+
+        // Store as Lazy - evaluation happens in contentHash
+        const lazyData = data instanceof Lazy ? data : new Lazy(() => data);
+        this.rate.set(tag, lazyData);
+        this.absorbed.push({ data: lazyData, tag });
+
+        // Store in state for squeeze
         const mixed = new Lazy(() => {
-            const stateData = this.state.get(tag);
             const pulled = lazyData.value;
-            const capacity = this.capacity.get('integrity').value;
-            
-            return this.permute({
-                ...stateData,
-                ...pulled,
-                _capacity: capacity
-            });
+            const capacity = this.capacity.get('integrity')?.value;
+            return { ...pulled, _capacity: capacity };
         });
-        
+
         this.state.set(tag, mixed);
-        
-        // Generate content hash for caching
-        this.generateContentHash(tag, mixed);
-        
         return mixed;
     }
-    
-    generateContentHash(tag, state) {
-        const content = state instanceof Lazy ? state.value : state;
-        if (!content) return null;
-        
-        // Use crypto for deterministic hash
-        const hash = crypto.createHash(CONFIG.strings.mainHashAlgorithm)
-            .update(JSON.stringify(content))
-            .update(tag)
-            .digest(CONFIG.strings.hashEncoding);
-        
-        // Store in pull graph for content-addressed access
-        if (pullGraph) {
-            pullGraph.register(`content-${hash}`, new Lazy(() => content));
-        }
-        
-        return hash;
-    }
-    
-    squeeze(tag, size) {
-        const state = this.state.get(tag);
-        if (!state) return null;
-        
-        // Return lazy that extracts rate portion when pulled
-        return new Lazy(() => {
-            const pulled = state instanceof Lazy ? state.value : state;
-            if (!pulled) return null;
-            
-            // Extract only rate portion, capacity stays protected
-            const output = {};
-            for (const [key, value] of Object.entries(pulled)) {
-                if (!key.startsWith('_')) {
-                    output[key] = value;
-                }
-            }
-            
-            return output;
-        });
-    }
-    
-    absorb(data, tag) {
-        // Simple absorb interface for sponge
-        if (!this.lazyKeccakState) {
-            this.lazyKeccakState = new Lazy(() => {
-                return {
-                    lanes: new Array(25).fill(null).map(() => new Lazy(() => BigInt(0))),
-                    round: 0,
-                    absorbed: LazyStream.empty(),
-                    squeezed: LazyStream.empty()
-                };
-            });
-        }
-        
-        const kState = this.lazyKeccakState.value;
-        
-        // Convert data to bytes
-        const dataBytes = new Lazy(() => {
-            if (typeof data === 'string') {
-                return new TextEncoder().encode(data);
-            } else if (data instanceof Uint8Array) {
-                return data;
-            } else if (data instanceof Buffer) {
-                return new Uint8Array(data);
-            } else {
-                return new TextEncoder().encode(JSON.stringify(data));
-            }
-        });
-        
-        // Add padding
-        const padded = new Lazy(() => {
-            const bytes = dataBytes.value;
-            const rate = CONFIG.crypto?.rate || 1088;
-            const rateBytes = rate / 8;
-            
-            // SHA-3 padding: 10*1 pattern
-            const msgLen = bytes.length;
-            const blockSize = rateBytes;
-            const padLen = blockSize - (msgLen % blockSize);
-            
-            const paddedBytes = new Uint8Array(msgLen + padLen);
-            paddedBytes.set(bytes);
-            paddedBytes[msgLen] = 0x06; // SHA-3 domain separator
-            paddedBytes[msgLen + padLen - 1] |= 0x80; // Final bit
-            
-            return paddedBytes;
-        });
-        
-        // Accumulate in absorbed stream
-        kState.absorbed = kState.absorbed ? 
-            kState.absorbed.append(padded) : 
-            new LazyStream(padded, null);
-        
-        // Store tag for later processing
-        this.rate.set(tag, new Lazy(() => data));
-        
-        // Prepare lazy permutation for hashing
-        const rate = CONFIG.crypto?.rate || 1088;
-        const rateBytes = rate / 8;
-        
-        this.lazyPermutation = new Lazy(() => {
-            // Process all absorbed blocks lazily
-            let currentStream = kState.absorbed;
-            while (currentStream) {
-                const block = currentStream.head;
-                const bytes = block.value;
-                for (let offset = 0; offset < bytes.length; offset += rateBytes) {
-                    const chunk = bytes.slice(offset, offset + rateBytes);
-                    this.xorIntoState(kState.lanes, chunk);
-                    // Apply Keccak-f after each block
-                    this.keccakF(kState);
-                }
-                currentStream = currentStream.tail;
-            }
-            return kState;
-        });
-    }
-    
-    permute(state) {
-        // Lazy Keccak state - only computed when needed
-        if (!this.lazyKeccakState) {
-            this.lazyKeccakState = new Lazy(() => {
-                // State is 5x5x64 bits = 1600 bits total
-                return {
-                    lanes: new Array(25).fill(null).map(() => new Lazy(() => BigInt(0))),
-                    round: 0,
-                    absorbed: LazyStream.empty(),  // Lazy stream for absorbed data
-                    squeezed: LazyStream.empty()   // Lazy stream for squeezed output
-                };
-            });
-        }
-        
-        // Lazy absorption - state changes are deferred
-        const lazyAbsorb = new Lazy(() => {
-            const kState = this.lazyKeccakState.value;
-            const stateBytes = this.serializeState(state);
-            
-            // Add SHA-3 padding (10*1 pattern)
-            const padded = new Lazy(() => {
-                const bytes = stateBytes.value;
-                const rate = CONFIG.crypto?.rate || 1088; // bits
-                const rateBytes = rate / 8;
-                
-                // SHA-3 padding: append 0x06, pad with zeros, end with 0x80
-                const msgLen = bytes.length;
-                const blockSize = rateBytes;
-                const padLen = blockSize - (msgLen % blockSize);
-                
-                const paddedBytes = new Uint8Array(msgLen + padLen);
-                paddedBytes.set(bytes);
-                paddedBytes[msgLen] = 0x06; // SHA-3 domain separator
-                paddedBytes[msgLen + padLen - 1] |= 0x80; // Final bit
-                
-                return paddedBytes;
-            });
-            
-            // Accumulate in absorbed stream (immutably)
-            kState.absorbed = kState.absorbed ? 
-                kState.absorbed.append(padded) : 
-                new LazyStream(padded, null);
-            
-            // XOR into rate portion lazily
-            const rate = CONFIG.crypto?.rate || 1088; // bits
-            const rateBytes = rate / 8;
-            
-            return new Lazy(() => {
-                // Process all absorbed blocks lazily
-                let currentStream = kState.absorbed;
-                while (currentStream) {
-                    const block = currentStream.head;
-                    const bytes = block.value;
-                    for (let offset = 0; offset < bytes.length; offset += rateBytes) {
-                        const chunk = bytes.slice(offset, offset + rateBytes);
-                        this.xorIntoState(kState.lanes, chunk);
-                        // Apply Keccak-f after each block
-                        this.keccakF(kState);
-                    }
-                    currentStream = currentStream.tail;
-                }
-                return kState;
-            });
-        });
-        
-        // Lazy permutation - only run when hash is pulled
-        this.lazyPermutation = new Lazy(() => {
-            const absorbed = lazyAbsorb.value;
-            return this.keccakF(absorbed.value);
-        });
-        
-        return state;
-    }
-    
-    serializeState(state) {
-        // Lazy serialization with proof preservation
-        return new Lazy(() => {
-            // Preserve proofs in capacity
-            const withProofs = {
-                ...state,
-                _proofs: Maybe.elim(
-                    () => 'Maybe',
-                    () => null,
-                    p => p
-                )(proofTrace.get(state)),
-                _lazy: state instanceof Lazy ? state._evaluated : false
-            };
-            
-            // Use our Pipeline for consistent serialization
-            const serialized = Pipeline.kleisli(
-                s => new Lazy(() => JSON.stringify(s)),
-                json => new Lazy(() => Buffer.from(json.value, 'utf8'))
-            )(withProofs);
-            
-            return serialized.value;
-        });
-    }
-    
-    xorIntoState(lanes, bytes) {
-        // Lazy XOR - each lane updates lazily
-        const bytesLazy = bytes instanceof Lazy ? bytes : new Lazy(() => bytes);
-        
-        for (let i = 0; i < 25 && i * 8 < bytesLazy.value.length; i++) {
-            const oldLane = lanes[i];
-            lanes[i] = new Lazy(() => {
-                const old = oldLane.value;
-                const slice = bytesLazy.value.slice(i * 8, (i + 1) * 8);
-                const newBits = slice.reduce((acc, byte, idx) => 
-                    acc | (BigInt(byte) << BigInt(idx * 8)), BigInt(0));
-                return old ^ newBits;
-            });
-        }
-    }
-    
-    keccakF(kState) {
-        // Lazy round application - compose 24 rounds
-        const rounds = new Array(24).fill(null).map((_, r) => 
-            new Lazy(() => this.keccakRound(r))
-        );
-        
-        // Compose rounds using Pipeline.kleisli
-        const roundPipeline = Pipeline.kleisli(...rounds.map(round => 
-            state => new Lazy(() => {
-                const roundFn = round.value;
-                return roundFn(state);
-            })
-        ));
-        
-        // Return lazy computation of full permutation
-        return new Lazy(() => {
-            const result = roundPipeline(kState);
-            return result instanceof Lazy ? result.value : result;
-        });
-    }
-    
-    keccakRound(roundNum) {
-        return (kState) => {
-            const lanes = kState.lanes;
-            
-            // θ (Theta) - Column parity as lazy computation
-            const theta = new Lazy(() => {
-                const C = new Array(5).fill(null).map((_, x) => 
-                    new Lazy(() => {
-                        let col = BigInt(0);
-                        for (let y = 0; y < 5; y++) {
-                            col ^= lanes[y * 5 + x].value;
-                        }
-                        return col;
-                    })
-                );
-                
-                const D = new Array(5).fill(null).map((_, x) => 
-                    new Lazy(() => {
-                        const left = C[(x + 4) % 5].value;
-                        const right = this.rotl64(C[(x + 1) % 5].value, 1);
-                        return left ^ right;
-                    })
-                );
-                
-                // Apply to all lanes lazily
-                for (let x = 0; x < 5; x++) {
-                    for (let y = 0; y < 5; y++) {
-                        const idx = y * 5 + x;
-                        const oldLane = lanes[idx];
-                        lanes[idx] = new Lazy(() => oldLane.value ^ D[x].value);
-                    }
-                }
-                
-                return lanes;
-            });
-            
-            // ρ (Rho) - Rotations as lazy operations
-            const rho = new Lazy(() => {
-                const rotated = theta.value;
-                const offsets = this.getRhoOffsets();
-                
-                for (let i = 0; i < 25; i++) {
-                    const oldLane = rotated[i];
-                    rotated[i] = new Lazy(() => 
-                        this.rotl64(oldLane.value, offsets[i])
-                    );
-                }
-                
-                return rotated;
-            });
-            
-            // π (Pi) - Permutation as lazy reordering
-            const pi = new Lazy(() => {
-                const rotated = rho.value;
-                const permuted = new Array(25);
-                
-                for (let x = 0; x < 5; x++) {
-                    for (let y = 0; y < 5; y++) {
-                        const srcIdx = y * 5 + x;
-                        const dstIdx = x * 5 + ((x + 3 * y) % 5);
-                        permuted[dstIdx] = rotated[srcIdx];
-                    }
-                }
-                
-                return permuted;
-            });
-            
-            // χ (Chi) - Non-linear transform
-            const chi = new Lazy(() => {
-                const permuted = pi.value;
-                const result = new Array(25);
-                
-                for (let y = 0; y < 5; y++) {
-                    for (let x = 0; x < 5; x++) {
-                        const idx = y * 5 + x;
-                        result[idx] = new Lazy(() => {
-                            const a = permuted[y * 5 + x].value;
-                            const b = permuted[y * 5 + ((x + 1) % 5)].value;
-                            const c = permuted[y * 5 + ((x + 2) % 5)].value;
-                            return a ^ ((~b) & c);
-                        });
-                    }
-                }
-                
-                return result;
-            });
-            
-            // ι (Iota) - Round constant
-            const iota = new Lazy(() => {
-                const afterChi = chi.value;
-                const rc = this.getRoundConstant(roundNum);
-                
-                afterChi[0] = new Lazy(() => afterChi[0].value ^ rc);
-                
-                // Track round in causal debugger
-                if (causalDebugger) {
-                    causalDebugger.trace('KECCAK_ROUND', { 
-                        round: roundNum,
-                        constant: rc.toString(16)
-                    });
-                }
-                
-                return afterChi;
-            });
-            
-            // Return new state with updated lanes
-            return {
-                ...kState,
-                lanes: iota.value,
-                round: roundNum + 1
-            };
-        };
-    }
-    
-    rotl64(n, shift) {
-        const s = BigInt(shift % 64);
-        return ((n << s) | (n >> (64n - s))) & ((1n << 64n) - 1n);
-    }
-    
-    getRhoOffsets() {
-        // Precomputed rotation offsets for ρ step
-        return [0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14];
-    }
-    
-    getRoundConstant(round) {
-        // SHA-3 round constants
-        const RC = [
-            0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an,
-            0x8000000080008000n, 0x000000000000808bn, 0x0000000080000001n,
-            0x8000000080008081n, 0x8000000000008009n, 0x000000000000008an,
-            0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
-            0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n,
-            0x8000000000008003n, 0x8000000000008002n, 0x8000000000000080n,
-            0x000000000000800an, 0x800000008000000an, 0x8000000080008081n,
-            0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n
-        ];
-        return RC[round];
-    }
-    
+
     contentHash(domain = 'content') {
-        // Domain-separated hash computation with categorical structure
+        // Squeeze phase - extract hash
         return new Lazy(() => {
-            if (!this.lazyPermutation) {
+            if (!this.absorbed || this.absorbed.length === 0) {
                 throw new Error('No data absorbed yet');
             }
-            
-            const permuted = this.lazyPermutation.value;
-            const kState = permuted instanceof Lazy ? permuted.value : permuted;
-            
-            // Squeeze phase with domain separation
-            const hashLanes = kState.lanes.slice(0, 4);
-            
-            const hashHex = hashLanes.map(lane => 
-                new Lazy(() => {
-                    const n = lane.value;
-                    return n.toString(16).padStart(16, '0');
-                })
-            );
-            
-            const finalHash = hashHex.map(h => h.value).join('');
-            
+
+            // Create hash from absorbed data - evaluate Lazy values here
+            const hasher = crypto.createHash(CONFIG.strings.mainHashAlgorithm);
+            for (const item of this.absorbed) {
+                const value = item.data.value; // Pull lazy value
+                const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+                hasher.update(serialized);
+                hasher.update(`|${item.tag}|`);
+            }
+
+            // Domain separation
+            hasher.update(`|domain:${domain}|`);
+
+            // Extract hash (squeeze)
+            const hash = hasher.digest(CONFIG.strings.hashEncoding);
+
             // Domain-separated registration
             if (pullGraph) {
-                pullGraph.register(`${domain}-sha3-${finalHash}`, new Lazy(() => kState));
+                pullGraph.register(`${domain}-hash-${hash}`, new Lazy(() => this.absorbed));
             }
-            
-            if (proofSystem) {
-                proofSystem.prove(finalHash, 'SHA3', [kState, domain]);
+
+            if (traceOrchestrator) {
+                traceOrchestrator.trace('SPONGE_HASH', { hash, absorbed: this.absorbed, domain });
             }
-            
-            return finalHash;
+
+            return hash;
         });
     }
     
@@ -5854,29 +5377,11 @@ class ProcessingCoordinator {
             }
         };
     }
-    
-    // Initialize Keccak state
-    initKeccakState() {
-        const KECCAK_LANES = 5 * 5;  // 25 lanes
-        const SHA3_256_RATE = 136;
-        const SHA3_256_CAPACITY = 64;
-        
-        return {
-            lanes: new Array(KECCAK_LANES).fill(null).map(() => new Lazy(() => 0n)),
-            absorbed: LazyStream.empty(),
-            squeezed: false,
-            rate: SHA3_256_RATE,
-            capacity: SHA3_256_CAPACITY,
-            round: 0
-        };
-    }
-    
     // Build-aware sponge that absorbs full context
     buildSponge(fileContent, fileName, buildContext) {
         // Clear previous state for new build
-        this.keccakState = this.initKeccakState();
-        this.lazyPermutation = null;
-        
+        this.absorbed = [];
+
         // Absorb file content
         this.absorb(fileContent, 'file-content');
 
@@ -5916,12 +5421,12 @@ class ProcessingCoordinator {
             // Absorb input
             const absorbed = this.absorb(data, stageId);
             
-            stage.currentLoad = (stage.currentLoad || 0) + 1;
+            if (!stage.currentLoad) stage.currentLoad = 0;
+            stage.currentLoad = stage.currentLoad + 1;
             await new Promise(resolve => setTimeout(resolve, stage.distance));
             stage.currentLoad--;
             
-            // Squeeze output (lazy)
-            const output = this.squeeze(stageId, stage.capacity);
+            const output = this.state.get(stageId);
             
             // Track in pull graph (register the lazy computation)
             if (pullGraph) {
@@ -6230,7 +5735,7 @@ class ProcessingCoordinator {
         return {
             linear: this.linearResources.size,
             affine: this.affinityResources.size,
-            borrowed: this.borrowed.size || 0,
+            borrowed: this.borrowed.size,
             processed: this.processedRegions.size,
             conflicts: this.conflicts.length
         };
@@ -6275,12 +5780,12 @@ class BuildScheduler {
         this.maxConcurrent = CONFIG.scheduler.maxConcurrent;
         this.pendingTimers = new Map();
         this.locks = new Map(); // File-level locks
-        this.buildHistory = new Map(); // Track build success/failure
-        this.coordinator = processingCoordinator; // Add coordinator reference
-        this.provenBuilds = new Map(); // Track proof-carrying builds
+        this.buildHistory = new Map();
+        this.coordinator = processingCoordinator;
+        this.validatedBuilds = new Map();
         
         // SELF-REGISTRATION
-        this.dependencies = ['ProcessingCoordinator', 'CausalDebugger', 'ProcessLockManager'];
+        this.dependencies = ['ProcessingCoordinator', 'TraceOrchestrator', 'ProcessLockManager'];
         this.provides = ['task-scheduling', 'concurrency-control', 'auto-scaling'];
         this.consumes = ['processor-availability', 'performance-metrics'];
         this.lane = 'orchestrator';
@@ -6309,7 +5814,7 @@ class BuildScheduler {
                     return;
                 }
                 
-                const metrics = causalDebugger.getMetrics();
+                const metrics = traceOrchestrator.getMetrics();
                 
                 // Scale down if memory pressure
                 if (metrics.memoryPressure > CONFIG.scheduler.memoryPressureThreshold) {
@@ -6317,7 +5822,7 @@ class BuildScheduler {
                         this.minConcurrency,
                         Math.floor(this.parent.maxConcurrent * CONFIG.scheduler.scaleDownFactor)
                     );
-                    causalDebugger.trace('AUTO_SCALE_DOWN', { 
+                    traceOrchestrator.trace('AUTO_SCALE_DOWN', { 
                         reason: 'memory_pressure',
                         newConcurrency: this.parent.maxConcurrent 
                     });
@@ -6328,7 +5833,7 @@ class BuildScheduler {
                         this.maxConcurrency,
                         Math.ceil(this.parent.maxConcurrent * CONFIG.scheduler.scaleUpFactor)
                     );
-                    causalDebugger.trace('AUTO_SCALE_UP', { 
+                    traceOrchestrator.trace('AUTO_SCALE_UP', { 
                         reason: 'good_performance',
                         newConcurrency: this.parent.maxConcurrent 
                     });
@@ -6349,7 +5854,7 @@ class BuildScheduler {
     
     initTelemetryFeedback() {
         // Subscribe to telemetry stream for real-time adaptation
-        const telemetryStream = causalDebugger.createTelemetryStream();
+        const telemetryStream = traceOrchestrator.createTelemetryStream();
         
         // Anomalies adjust priorities in real-time
         this.telemetrySubscription = new Lazy(() => telemetryStream.anomalies.value
@@ -6360,7 +5865,7 @@ class BuildScheduler {
                         CONFIG.limits.minConcurrent, 
                         this.maxConcurrent - 1
                     );
-                    causalDebugger.trace('TELEMETRY_SCALE_DOWN', {
+                    traceOrchestrator.trace('TELEMETRY_SCALE_DOWN', {
                         anomaly: anomaly.type,
                         newConcurrency: this.maxConcurrent
                     });
@@ -6378,7 +5883,7 @@ class BuildScheduler {
             const optimalConcurrency = this.predictOptimalConcurrency(agg);
             if (Math.abs(optimalConcurrency - this.maxConcurrent) > 1) {
                 this.maxConcurrent = optimalConcurrency;
-                causalDebugger.trace('TELEMETRY_OPTIMIZE', {
+                traceOrchestrator.trace('TELEMETRY_OPTIMIZE', {
                     metrics: agg,
                     newConcurrency: this.maxConcurrent
                 });
@@ -6412,13 +5917,13 @@ class BuildScheduler {
         
         new PullPromise(async () => {
             await new Promise(resolve => {
-                const timer = causalDebugger.trace('PAUSE_SCHEDULING', { duration });
+                const timer = traceOrchestrator.trace('PAUSE_SCHEDULING', { duration });
                 lazyEvents.emit({ type: 'SCHEDULER_PAUSED', duration });
                 
                 // Use lazy timer instead of setTimeout
                 const lazyTimer = new Lazy(() => {
                     this.processing = wasProcessing;
-                    causalDebugger.trace('RESUME_SCHEDULING', { timer });
+                    traceOrchestrator.trace('RESUME_SCHEDULING', { timer });
                     lazyEvents.emit({ type: 'SCHEDULER_RESUMED' });
                     resolve();
                 });
@@ -6433,8 +5938,19 @@ class BuildScheduler {
     
     async schedule(task, priority = CONFIG.scheduler.defaultPriority) {
         console.log('[SCHEDULER] Scheduling task:', task.name, 'Priority:', priority);
-        causalDebugger.trace('Schedule task', { task: task.name, priority });
-        
+        traceOrchestrator.trace('Schedule task', { task: task.name, priority });
+
+        try {
+            const failureProb = traceOrchestrator.getFailureProbability(task.name);
+            if (failureProb >= CONFIG.prediction.remediationThreshold) {
+                await this.remediate(task, failureProb);
+                traceOrchestrator.trace('PREDICTED_FAILURE', {
+                    task: task.name,
+                    probability: failureProb
+                });
+            }
+        } catch (e) {}
+
         // Check for existing task for same file
         const existing = this.queue.findIndex(t => t.file === task.file);
         if (existing !== CONFIG.processor.notFoundIndex) {
@@ -6442,17 +5958,46 @@ class BuildScheduler {
             if (priority > this.queue[existing].priority) {
                 this.queue.splice(existing, 1);
             } else {
-                causalDebugger.trace('Task already queued', { file: task.file });
+                traceOrchestrator.trace('Task already queued', { file: task.file });
                 return;
             }
         }
-        
+
         // Add to queue
         this.queue.push({ ...task, priority, id: crypto.randomBytes(CONFIG.processor.hashLength).toString(CONFIG.strings.hashEncoding) });
         this.queue.sort((a, b) => b.priority - a.priority);
-        
+
         // Process queue
         await this.process();
+    }
+
+    async remediate(task, failureProb) {
+        traceOrchestrator.trace('REMEDIATION_START', { task: task.name, probability: failureProb });
+
+        // Clear cache for likely-to-fail tasks
+        if (pullGraph && pullGraph.objects.has(task.file)) {
+            pullGraph.objects.delete(task.file);
+            traceOrchestrator.trace('CACHE_CLEARED', { file: task.file, reason: 'predicted-failure' });
+        }
+
+        // Reset build history to force clean rebuild
+        if (this.buildHistory.has(task.file)) {
+            this.buildHistory.delete(task.file);
+            traceOrchestrator.trace('HISTORY_RESET', { file: task.file });
+        }
+
+        // If failure probability very high, restart browser (for document processing)
+        if (failureProb > CONFIG.prediction.browserRestartThreshold && processor && processor.state.browser) {
+            try {
+                await processor.state.browser.close();
+                processor.state.browser = null;
+                traceOrchestrator.trace('BROWSER_RESTARTED', { reason: 'high-failure-probability' });
+            } catch (e) {
+                traceOrchestrator.error(e, { context: 'remediation-browser-restart' });
+            }
+        }
+
+        traceOrchestrator.trace('REMEDIATION_COMPLETE', { task: task.name });
     }
     
     async scheduleProven(task, priority = CONFIG.scheduler.defaultPriority) {
@@ -6467,13 +6012,17 @@ class BuildScheduler {
             }
         };
 
-        try {
-            const validated = checkInputsExist.apply(state);
-            task.validated = validated.proven;
-        } catch (e) {
-            causalDebugger.trace('Task validation failed', { task: task.name, error: e.message });
-            throw e;
+        const validation = taskValidator.validateSchema(state, {
+            inputs: { type: 'array', items: { type: 'validPath' }, required: true }
+        });
+
+        if (validation.errors.length > 0) {
+            const error = new Error(`Task validation failed: ${validation.errors.map(e => e.error).join(', ')}`);
+            traceOrchestrator.trace('Task validation failed', { task: task.name, errors: validation.errors });
+            throw error;
         }
+
+        task.validated = true;
 
         return this.schedule(task, priority);
     }
@@ -6488,7 +6037,7 @@ class BuildScheduler {
             
             // Check if file is locked
             if (this.locks.has(task.file)) {
-                causalDebugger.trace('File locked, requeuing', { file: task.file });
+                traceOrchestrator.trace('File locked, requeuing', { file: task.file });
                 this.queue.push(task); // Requeue at end
                 await new Promise(resolve => setTimeout(resolve, CONFIG.scheduler.lockCheckInterval));
                 continue;
@@ -6514,7 +6063,7 @@ class BuildScheduler {
         // Absorb task into coordinator
         this.coordinator.absorb(task, task.id);
         
-        causalDebugger.trace('Running task', { task: task.name, file: task.file });
+        traceOrchestrator.trace('Running task', { task: task.name, file: task.file });
         
         try {
             await task.fn();
@@ -6532,7 +6081,7 @@ class BuildScheduler {
                 this.buildHistory = new Map(entries.slice(-CONFIG.scheduler.buildHistoryTrim));
             }
             
-            causalDebugger.trace('Task completed', { 
+            traceOrchestrator.trace('Task completed', { 
                 task: task.name
                 // Duration is computed dynamically, not a magic number
             });
@@ -6544,24 +6093,24 @@ class BuildScheduler {
             const history = this.buildHistory.get(task.file);
             if (history) history.failure++;
             
-            causalDebugger.error(error, { 
+            traceOrchestrator.error(error, { 
                 task: task.name, 
                 file: task.file,
                 history: this.buildHistory.get(task.file)
             });
             
-            // ADAPTIVE retry logic using CausalDebugger analysis
+            // ADAPTIVE retry logic using TraceOrchestrator analysis
             const failureHistory = this.buildHistory.get(task.file);
             if (failureHistory && failureHistory.failure < CONFIG.scheduler.retryLimit) {
-                // Get insights from CausalDebugger
-                const metrics = causalDebugger.getMetrics();
-                const patterns = causalDebugger.detectPatterns();
+                // Get insights from TraceOrchestrator
+                const metrics = traceOrchestrator.getMetrics();
+                const patterns = traceOrchestrator.detectPatterns();
                 
                 // Determine adaptive retry strategy
                 const retryStrategy = this.determineRetryStrategy(error, metrics, patterns, failureHistory);
                 
                 if (retryStrategy.shouldRetry) {
-                    causalDebugger.trace('Scheduling adaptive retry', { 
+                    traceOrchestrator.trace('Scheduling adaptive retry', { 
                         file: task.file, 
                         attempt: failureHistory.failure,
                         delay: retryStrategy.delay,
@@ -6574,7 +6123,7 @@ class BuildScheduler {
                         this.schedule(task, adaptivePriority);
                     }, retryStrategy.delay);
                 } else {
-                    causalDebugger.trace('Skipping retry', { 
+                    traceOrchestrator.trace('Skipping retry', { 
                         file: task.file,
                         reason: retryStrategy.reason
                     });
@@ -6617,7 +6166,7 @@ class BuildScheduler {
             reason: 'default'
         };
         
-        if (metrics.memoryPressure > CONFIG.ui.opacity.strong) {
+        if (metrics.memoryPressure > THRESHOLDS.MEMORY_PRESSURE_HIGH) {
             strategy.shouldRetry = false;
             strategy.reason = 'memory_pressure_too_high';
             return strategy;
@@ -6644,20 +6193,18 @@ class BuildScheduler {
             strategy.delay = CONFIG.scheduler.retryDelayBase * Math.pow(2, failureHistory.failure);
             strategy.reason = 'timeout_exponential_backoff';
         } else if (patterns.memoryLeaks) {
-            strategy.delay = CONFIG.scheduler.retryDelayBase * CONFIG.debug.analysis.topResultsLimit;
+            strategy.delay = CONFIG.scheduler.retryDelayBase * THRESHOLDS.TOP_RESULTS;
             strategy.priority = -CONFIG.processor.minGroupSize;
             strategy.reason = 'memory_leak_detected';
         }
         
-        // Adjust based on system load (high event rate indicates busy system)
-        if (metrics.eventRate > CONFIG.scheduler.maxConcurrent * CONFIG.process.lockRetryAttempts) {
-            // System is busy - increase delay
+        if (metrics.eventRate > THRESHOLDS.EVENT_RATE_BUSY) {
             strategy.delay *= 2;
             strategy.reason += '_high_load';
         }
         
         // Increase priority if this is a critical path task
-        const criticalPaths = causalDebugger.getCriticalPath();
+        const criticalPaths = traceOrchestrator.getCriticalPath();
         if (criticalPaths.some(path => path.path.includes(error.message))) {
             strategy.priority += 2;
             strategy.reason += '_critical_path';
@@ -6885,8 +6432,9 @@ class DocumentProcessor {
     }
     
     generateStableId(title, counter) {
-        // Validate input
-        if (!title || typeof title !== 'string') {
+        try {
+            checkType(title, NonEmptyString);
+        } catch {
             return `${CONFIG.strings.sectionIdPrefix}${counter}-untitled`;
         }
         
@@ -7381,10 +6929,8 @@ class LaTeXProcessor {
         result = result.replace(/\\dot\{([^}]+)\}/g, `<${CONFIG.strings.inlineElement} class="${CONFIG.strings.dotAccentClass}">$1ė</${CONFIG.strings.inlineElement}>`);
         result = result.replace(/\\vec\{([^}]+)\}/g, `<${CONFIG.strings.inlineElement} class="${CONFIG.strings.vectorClass}">$1⃗</${CONFIG.strings.inlineElement}>`);
         
-        // PHASE 5: Handle fractions (recursive) with loop protection
         let fractionIterations = 0;
-        const MAX_FRACTION_DEPTH = 10;
-        while (result.includes('\\frac{') && fractionIterations++ < MAX_FRACTION_DEPTH) {
+        while (result.includes('\\frac{') && fractionIterations++ < THRESHOLDS.MAX_FRACTION_DEPTH) {
             result = result.replace(/\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, 
                 (m, num, den) => {
                     const processedNum = this.escapeHtml(this.processTeX(num));
@@ -7403,10 +6949,9 @@ class LaTeXProcessor {
         // Handle complex subscripts and superscripts with nested braces
         // This needs careful handling to avoid breaking on nested structures
         const processScript = (content, type) => {
-            // Recursively process the content but at reduced depth
             const oldDepth = this.context ? this.context.depth : 0;
             if (this.context) {
-                this.context.depth = Math.max(oldDepth - 1, CONFIG.processor.topSectionLevel);
+                this.context.depth = Math.max(oldDepth - 1, 1);
             }
             const processed = this.processTeX(content);
             if (this.context) {
@@ -8264,7 +7809,7 @@ class HTMLModality {
             '    line-height: ', CONFIG.ui.typography.lineHeight.relaxed, ';\n',
             '    color: var(--text);\n',
             '    display: ', CONFIG.css.display.flex, ';\n',
-            '    min-height: ', 100, 'vh;\n',
+            '    min-height: ', THRESHOLDS.VIEWPORT_HEIGHT, 'vh;\n',
             '}\n\n'
         ]));
     }
@@ -8280,7 +7825,7 @@ class HTMLModality {
             '    position: ', CONFIG.css.position.fixed, ';\n',
             '    top: 0;\n',
             '    left: ', CONFIG.ui.zero, ';\n',
-            '    height: ', 100, 'vh;\n',
+            '    height: ', THRESHOLDS.VIEWPORT_HEIGHT, 'vh;\n',
             '    overflow-y: auto;\n',
             '    padding: ', CONFIG.ui.typography.scale.base, 'rem;\n',
             '}\n\n'
@@ -8389,357 +7934,8 @@ class HTMLModality {
             '}\n'
         ]));
     }
-    
-    generateCSS_OLD() {
-        const css = {
-            colors: CONFIG.colors,
-            ui: CONFIG.ui,
-            css: CONFIG.css,
-            strings: CONFIG.strings,
-            watcher: CONFIG.watcher,
-            common: COMMON,
-            baseValues: N
-        };
-        
-        
-        return `
-/* Variables */
-:root {
-    --serif: 'Crimson Text', Georgia, serif;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --mono: 'SF Mono', Monaco, monospace;
-    --text: ${css.colors.text.body};
-    --bg: ${css.colors.background.main};
-    --sidebar-bg: ${css.colors.background.sidebar};
-    --border: ${css.colors.border.default};
-    --link: ${css.colors.link.default};
-    --link-hover: ${css.colors.link.active};
-}
 
-* {
-    margin: ${css.ui.zero};
-    padding: ${css.ui.zero};
-    box-sizing: ${css.css.boxModel.border};
-}
-
-body {
-    font-family: var(--serif);
-    font-size: ${css.ui.typography.pixels.base}px;
-    line-height: ${css.ui.typography.lineHeight.relaxed};
-    color: var(--text);
-    display: ${css.css.display.flex};
-    min-height: ${css.common.hundred}vh;
-}
-
-/* TOC Sidebar */
-.toc-sidebar {
-    width: ${css.ui.layout.sidebarWidth}px;
-    background: var(--sidebar-bg);
-    border-right: ${css.ui.borderWidth}px solid var(--border);
-    position: ${css.css.position.fixed};
-    top: 0;
-    left: ${css.ui.zero};
-    height: ${css.common.hundred}vh;
-    overflow-y: auto;
-    padding: ${css.ui.typography.scale.base}rem;
-}
-
-.toc-header {
-    display: ${css.css.display.flex};
-    justify-content: ${css.css.align.spaceBetween};
-    align-items: ${css.css.align.center};
-    margin-bottom: ${css.ui.typography.scale.xlarge}rem;
-    padding-bottom: ${css.ui.typography.scale.base}rem;
-    border-bottom: ${css.ui.spacing.micro}px solid var(--border);
-}
-
-.toc-header h2 {
-    font-family: var(--sans);
-    font-size: ${css.ui.typography.scale.large}rem;
-    margin: ${css.ui.zero};
-}
-
-.expand-all {
-    font-size: ${css.ui.typography.scale.small}rem;
-    padding: ${css.ui.typography.scale.medium}rem ${css.ui.typography.scale.xlarge}rem;
-    background: ${css.colors.neutralBase};
-    border: ${css.ui.borderWidth}px solid var(--border);
-    border-radius: ${css.ui.spacing.tiny}px;
-    cursor: ${css.css.cursor.pointer};
-}
-
-.expand-all:hover {
-    background: var(--bg);
-}
-
-/* TOC Entries */
-.${css.strings.navigationSectionClass} {
-    display: ${css.css.display.flex};
-    align-items: ${css.css.align.center};
-    margin: ${css.ui.typography.scale.small}rem 0;
-}
-
-.${css.strings.navigationMajorClass} {
-    margin-top: ${css.ui.typography.scale.large}rem;
-    font-weight: ${css.ui.typography.weight.semibold};
-}
-
-.${css.strings.toggleControlClass} {
-    background: none;
-    border: none;
-    cursor: ${css.css.cursor.pointer};
-    padding: ${css.ui.typography.scale.small}rem;
-    margin-right: ${css.ui.typography.scale.small}rem;
-    color: var(--text);
-    font-size: ${css.ui.typography.scale.tiny}rem;
-    width: ${css.ui.layout.toggleButtonWidth}px;
-    text-align: ${css.css.align.center};
-}
-
-.${css.strings.toggleIconClass} {
-    display: ${css.css.display.inlineBlock};
-    transition: transform ${css.ui.transition.normal}s;
-}
-
-.${css.strings.toggleControlClass}[aria-expanded="true"] .${css.strings.toggleIconClass} {
-    transform: rotate(90deg);
-}
-
-.${css.strings.spacerClass} {
-    width: ${css.ui.layout.tocIndent}px;
-    display: ${css.css.display.inlineBlock};
-}
-
-.${css.strings.navigationLinkClass} {
-    color: var(--text);
-    text-decoration: ${css.css.textDecoration.none};
-    padding: ${css.ui.typography.scale.medium}rem ${css.ui.typography.scale.large}rem;
-    border-radius: ${css.ui.spacing.tiny}px;
-    display: ${css.css.display.block};
-    flex: 1;
-    transition: ${css.ui.cssProps.all} ${css.ui.transition.normal}s;
-}
-
-.${css.strings.navigationLinkClass}:hover {
-    background: ${css.colors.neutralBase};
-    color: var(--link);
-}
-
-.${css.strings.navigationLinkClass}.${css.strings.classActive} {
-    background: ${css.colors.neutralBase};
-    color: var(--link);
-    font-weight: ${css.ui.typography.weight.semibold};
-    box-shadow: 0 ${css.ui.borderWidth}px ${css.ui.radius.small}px ${css.colors.shadowBase}${css.ui.shadow.opacity.light});
-}
-
-.${css.strings.navigationNumberClass} {
-    display: ${css.css.display.inlineBlock};
-    min-width: ${2}em;
-    font-weight: ${css.ui.typography.weight.semibold};
-    color: var(--link);
-}
-
-.${css.strings.childrenContainerClass} {
-    margin-left: ${css.ui.typography.scale.xlarge}rem;
-    border-left: ${2}px solid var(--border);
-    padding-left: ${css.ui.typography.scale.large}rem;
-    margin-top: ${css.ui.typography.scale.small}rem;
-}
-
-/* Main Content */
-.content {
-    margin-left: ${css.ui.layout.sidebarWidth}px;
-    padding: ${css.ui.typography.scale.huge}rem ${css.ui.typography.scale.massive}rem;
-    max-width: ${css.ui.layout.contentMaxWidth}px;
-    width: ${css.ui.dimensions.full};
-}
-
-.section-heading {
-    font-family: var(--sans);
-    margin: ${css.ui.typography.scale.huge}rem ${css.ui.zero} ${css.ui.typography.scale.base}rem;
-    position: ${css.css.position.relative};
-    padding-left: ${css.ui.typography.scale.huge}rem;
-}
-
-.anchor-link {
-    position: ${css.css.position.absolute};
-    left: ${css.ui.zero};
-    color: var(--border);
-    text-decoration: ${css.css.textDecoration.none};
-    opacity: ${css.ui.opacity.transparent};
-    transition: opacity ${css.ui.transition.normal}s;
-}
-
-.section-heading:hover .anchor-link {
-    opacity: ${css.ui.opacity.opaque};
-    color: var(--link);
-}
-
-h1 { font-size: ${css.ui.typography.scale.giant}rem; }
-h2 { font-size: ${css.ui.typography.scale.huge}rem; }
-h3 { font-size: ${css.ui.typography.scale.xlarge}rem; }
-h4 { font-size: ${css.ui.typography.scale.large}rem; }
-
-/* Paragraph spacing */
-p {
-    margin: ${css.ui.typography.scale.medium}rem 0;
-    line-height: ${css.ui.typography.lineHeight.loose};
-}
-
-/* Tighten spacing between list items */
-li {
-    margin: ${css.ui.typography.scale.large}rem 0;
-}
-
-/* Math Rendering */
-.${css.strings.blockContentClass} {
-    display: ${css.css.display.block};
-    margin: ${css.ui.typography.scale.medium}rem 0;
-    padding: ${css.ui.typography.scale.base}rem;
-    background: ${css.colors.background.sidebar};
-    border-left: ${css.ui.radius.small}px solid var(--link);
-    overflow-x: auto;
-    font-family: 'STIX Two Math', 'Cambria Math', serif;
-    font-size: ${css.ui.typography.scale.medium}em;
-    text-align: ${css.css.align.center};
-}
-
-.${css.strings.inlineContentClass} {
-    font-family: 'STIX Two Math', 'Cambria Math', serif;
-    font-size: ${css.ui.typography.scale.base}em;
-    padding: ${css.ui.zero} ${css.ui.typography.emScale.small}em;
-    color: ${css.colors.stringColor};
-}
-
-.${css.strings.fractionClass} {
-    display: ${css.css.display.inlineBlock};
-    vertical-align: middle;
-    text-align: ${css.css.align.center};
-}
-
-.${css.strings.fractionClass} .${css.strings.numeratorClass} {
-    display: ${css.css.display.block};
-    border-bottom: ${css.ui.borderWidth}px solid currentColor;
-    padding-bottom: ${css.ui.typography.emScale.tiny}em;
-}
-
-.${css.strings.fractionClass} .${css.strings.denominatorClass} {
-    display: ${css.css.display.block};
-    padding-top: ${css.ui.typography.emScale.tiny}em;
-}
-
-.matrix {
-    display: ${css.css.display.inlineTable};
-    border-left: ${2}px solid;
-    border-right: ${2}px solid;
-    border-radius: ${css.ui.spacing.tiny}px;
-    padding: ${css.ui.typography.emScale.medium}em;
-    margin: ${css.ui.zero} ${css.ui.typography.emScale.medium}em;
-}
-
-.aligned-math, .array-math {
-    display: ${css.css.display.inlineTable};
-    margin: ${css.ui.typography.scale.base}em auto;
-    border-collapse: collapse;
-}
-.aligned-math td, .array-math td {
-    padding: ${css.ui.typography.emScale.small}em ${css.ui.typography.emScale.large}em;
-    text-align: ${css.css.align.center};
-}
-.aligned-math .align-cell:nth-child(odd) {
-    text-align: ${css.css.align.end};
-}
-.aligned-math .align-cell:nth-child(even) {
-    text-align: ${css.css.align.start};
-}
-.array-math .array-cell {
-    padding: ${css.ui.typography.emScale.medium}em ${css.ui.typography.emScale.xlarge}em;
-}
-.${css.strings.operatorClass} {
-    font-family: var(--serif);
-    font-style: normal;
-    padding: ${css.ui.zero} ${css.ui.typography.emScale.small}em;
-}
-.${css.strings.annotatedElementClass} {
-    display: ${css.css.display.inlineBlock};
-    position: ${css.css.position.relative};
-    padding: ${css.ui.zero} ${css.ui.typography.emScale.large}em;
-}
-.${css.strings.annotationTextClass} {
-    position: ${css.css.position.absolute};
-    top: -${css.ui.typography.emScale.xlarge}em;
-    left: ${css.ui.dimensions.half};
-    transform: ${css.ui.transform.halfway};
-    font-size: ${css.ui.typography.scale.tiny}em;
-}
-.${css.strings.tildeAccentClass}, .${css.strings.hatAccentClass}, .${css.strings.barAccentClass}, .${css.strings.dotAccentClass}, .${css.strings.vectorClass} {
-    display: ${css.css.display.inlineBlock};
-}
-.${css.strings.calligraphicClass} { font-family: 'STIX Two Math'; font-style: italic; }
-.${css.strings.blackboardClass} { font-family: 'STIX Two Math'; font-weight: ${css.ui.typography.weight.bold}; }
-.${css.strings.frakturClass} { font-family: 'STIX Two Math'; font-weight: ${css.ui.typography.weight.bold}; font-style: italic; }
-.${css.strings.sansSerifClass} { font-family: var(--sans); }
-.${css.strings.boldStyleClass} { font-weight: ${css.ui.typography.weight.bold}; }
-.${css.strings.romanStyleClass} { font-family: var(--serif); font-style: normal; }
-
-/* Code blocks */
-pre {
-    background: ${css.colors.background.code};
-    border: ${css.ui.borderWidth}px solid var(--border);
-    border-radius: ${css.ui.spacing.compact}px;
-    padding: ${css.ui.typography.scale.base}rem;
-    margin: ${css.ui.typography.scale.small}rem 0;
-    overflow-x: auto;
-}
-
-code {
-    font-family: var(--mono);
-    font-size: ${css.ui.typography.scale.small}em;
-    background: ${css.colors.background.code};
-    padding: ${css.ui.typography.emScale.small}em ${css.ui.typography.emScale.medium}em;
-    border-radius: ${css.ui.spacing.tiny}px;
-}
-
-pre code {
-    background: none;
-    padding: ${css.ui.zero};
-}
-
-/* Responsive */
-@media (max-width: ${css.ui.layout.contentMaxWidth}px) {
-    .toc-sidebar {
-        transform: ${css.ui.transform.offscreen};
-        transition: transform ${css.ui.transition.slow}s;
-    }
-    
-    .toc-sidebar.open {
-        transform: translateX(${css.ui.zero});
-    }
-    
-    .content {
-        margin-left: ${css.ui.zero};
-    }
-}
-
-/* Print styles */
-@media print {
-    .toc-sidebar {
-        position: static;
-        width: ${css.ui.dimensions.full};
-        page-break-after: always;
-    }
-    
-    .content {
-        margin-left: ${css.ui.zero};
-    }
-    
-    .anchor-link {
-        display: ${css.css.display.none};
-    }
-}
-`;
-    }
-    
+ 
     generateJS() {
         // Direct access to CONFIG values for template literals
         const js = CONFIG;
@@ -9077,7 +8273,7 @@ class MarkdownModality {
                 case 'hr':
                     return '---';
                 default:
-                    return block.content || '';
+                    return block.content;
             }
         }).join('\n\n');
     }
@@ -9125,7 +8321,7 @@ const MANDATORY_COMMIT_FILES = [
     CONFIG.files.buildScript,
     CONFIG.files.readmeFile,
     CONFIG.files.indexFile,
-    'LICENSE',  // License file
+    'LICENSE',
     CONFIG.files.primerDoc.txt,
     CONFIG.files.workingDoc.txt,
     CONFIG.files.primerDoc.html,
@@ -9296,9 +8492,15 @@ class ProcessLockManager {
 
 const lockManager = new ProcessLockManager();
 
-// INDEX GENERATION
+// VIEW RENDERING
 
-function generateIndex(documents) {
+function renderView(config, data) {
+    if (config.type === 'document-index') {
+        return renderDocumentIndex(config, data);
+    }
+}
+
+function renderDocumentIndex(config, documents) {
     const extractDescription = (text) => {
         // Get a professional summary based on document type
         if (text.includes(CONFIG.content.experienceTitle)) {
@@ -9334,7 +8536,7 @@ function generateIndex(documents) {
         const mdSize = getSizeOrZero(path.join(PROJECT_ROOT, doc.md));
         
         // Count sections
-        const sectionCount = (content.match(CONFIG.patterns.sectionCount) || []).length;
+        const sectionCount = content.match(CONFIG.patterns.sectionCount)?.length;
         
         return {
             name: doc.name,
@@ -9524,6 +8726,7 @@ function generateIndex(documents) {
     return lazyFS.write(path.join(PROJECT_ROOT, CONFIG.files.indexFile), html);
 }
 
+
 async function buildFile(docConfig) {
     console.log('[BUILD] Starting build for:', docConfig.txt);
 
@@ -9537,7 +8740,7 @@ async function buildFile(docConfig) {
     const builderHash = await lazyFS.pull(
         lazyFS.read(path.join(PROJECT_ROOT, 'scripts/builder.js'))
     ).then(content => {
-        const hash = crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
+        const hash = crypto.createHash('sha256').update(content).digest('hex').substring(0, THRESHOLDS.HASH_SHORT_LENGTH);
         return { name: 'builder', hash };
     }).catch(() => ({ name: 'builder', hash: 'unknown' }));
 
@@ -9557,9 +8760,12 @@ async function buildFile(docConfig) {
         docConfig.txt,
         buildContext
     );
-    
+
     // Create cache key with domain separation
     const cacheKey = `build-${buildHash.value}-${docConfig.txt}`;
+    console.log('[BUILD] Hermetic cache key:', cacheKey);
+    console.log('[BUILD] Git commit:', buildContext.gitCommit);
+    console.log('[BUILD] Builder hash:', buildContext.dependencies[0].hash);
     
     // Create categorical cache functor for this build
     const cache = processingCoordinator.cacheFunctor(
@@ -9593,7 +8799,7 @@ async function buildFile(docConfig) {
         // Use the base name from the html file in CONFIG
         const outputBaseName = path.basename(data.docConfig.html, '.html');
 
-        causalDebugger.trace('BUILD_START', { file: data.file, name: outputBaseName, hash: data.hash });
+        traceOrchestrator.trace('BUILD_START', { file: data.file, name: outputBaseName, hash: data.hash });
 
         // Pass raw content through without processing yet
         const result = { ...data, name: outputBaseName };
@@ -9618,10 +8824,10 @@ async function buildFile(docConfig) {
                 parseResult.value;
             }
         } catch (parseError) {
-            causalDebugger.error(parseError, {
+            traceOrchestrator.error(parseError, {
                 context: 'DOCUMENT_PARSE_FAILED',
                 file: data.file,
-                contentLength: data.content?.length || 0
+                contentLength: data.content?.length
             });
             throw new Error(`Failed to parse document ${data.file}: ${parseError.message}`);
         }
@@ -9694,7 +8900,7 @@ async function buildFile(docConfig) {
 
         // Log any format generation errors but continue
         if (formatErrors.length > 0) {
-            causalDebugger.trace('FORMAT_GENERATION_PARTIAL_FAILURE', {
+            traceOrchestrator.trace('FORMAT_GENERATION_PARTIAL_FAILURE', {
                 file: data.file,
                 errors: formatErrors,
                 successfulFormats: Object.keys(formats).filter(k => !formatErrors.some(e => e.startsWith(k.toUpperCase())))
@@ -9723,7 +8929,7 @@ async function buildFile(docConfig) {
                 writeResults.success.push('html');
             } catch (htmlWriteError) {
                 writeResults.failed.push({ format: 'html', error: htmlWriteError.message });
-                causalDebugger.error(htmlWriteError, { context: 'HTML_WRITE_FAILED', file: data.file });
+                traceOrchestrator.error(htmlWriteError, { context: 'HTML_WRITE_FAILED', file: data.file });
             }
         }
 
@@ -9735,7 +8941,7 @@ async function buildFile(docConfig) {
                 writeResults.success.push('md');
             } catch (mdWriteError) {
                 writeResults.failed.push({ format: 'md', error: mdWriteError.message });
-                causalDebugger.error(mdWriteError, { context: 'MD_WRITE_FAILED', file: data.file });
+                traceOrchestrator.error(mdWriteError, { context: 'MD_WRITE_FAILED', file: data.file });
             }
         }
 
@@ -9747,7 +8953,7 @@ async function buildFile(docConfig) {
                 writeResults.success.push('pdf');
             } catch (pdfError) {
                 writeResults.failed.push({ format: 'pdf', error: pdfError.message });
-                causalDebugger.error(pdfError, { context: 'PDF_GENERATION_FAILED', file: data.file });
+                traceOrchestrator.error(pdfError, { context: 'PDF_GENERATION_FAILED', file: data.file });
 
                 // Try to write PDF HTML as fallback
                 try {
@@ -9795,7 +9001,7 @@ async function buildFile(docConfig) {
         writeOutputFiles,
 
         data => new Lazy(() => {
-            causalDebugger.trace('BUILD_COMPLETE', {
+            traceOrchestrator.trace('BUILD_COMPLETE', {
                 file: data.file,
                 name: data.name,
                 formats: Object.keys(data.formats)
@@ -9815,7 +9021,7 @@ async function buildFile(docConfig) {
         const cached = await cache.pull();
         if (cached) {
             console.log('[BUILD] Cache hit for:', docConfig.txt);
-            causalDebugger.trace('CACHE_HIT_VALID', {
+            traceOrchestrator.trace('CACHE_HIT_VALID', {
                 file: docConfig.txt,
                 formats: Object.keys(cached.formats)
             });
@@ -9830,7 +9036,7 @@ async function buildFile(docConfig) {
         // Store in cache with proper structure
         if (result && result.formats) {
             pullGraph.register(cacheKey, new Lazy(() => result));
-            causalDebugger.trace('CACHE_STORE', {
+            traceOrchestrator.trace('CACHE_STORE', {
                 file: docConfig.txt,
                 cacheKey,
                 formats: Object.keys(result.formats)
@@ -9844,13 +9050,13 @@ async function buildFile(docConfig) {
         const result = await cachedPipeline.pull();
         return result;
     } catch (error) {
-        causalDebugger.error(error, { 
-            file: file.txt, 
-            context: 'file_build' 
+        traceOrchestrator.error(error, {
+            file: docConfig.txt,
+            context: 'file_build'
         });
         lazyEvents.emit({
             type: 'BUILD_ERROR',
-            file: file.txt,
+            file: docConfig.txt,
             error: error.message
         });
         throw error;
@@ -9860,7 +9066,7 @@ async function buildFile(docConfig) {
 async function generatePDF(html, pdfPath, name) {
     if (!processor.state.browser) {
         try {
-            if (causalDebugger) causalDebugger.trace('BROWSER_LAUNCH', { name });
+            if (traceOrchestrator) traceOrchestrator.trace('BROWSER_LAUNCH', { name });
             
             processor.state.browser = await puppeteer.launch({
                 headless: CONFIG.strings.headlessMode,
@@ -9877,12 +9083,12 @@ async function generatePDF(html, pdfPath, name) {
             });
             
             processor.state.browser.on('disconnected', () => {
-                if (causalDebugger) causalDebugger.trace('BROWSER_DISCONNECTED', { name });
+                if (traceOrchestrator) traceOrchestrator.trace('BROWSER_DISCONNECTED', { name });
                 processor.state.browser = null;
                 processor.state.pages.clear();
             });
         } catch (error) {
-            if (causalDebugger) causalDebugger.error(error, { context: 'BROWSER_LAUNCH', name });
+            if (traceOrchestrator) traceOrchestrator.error(error, { context: 'BROWSER_LAUNCH', name });
             throw new Error(`Failed to launch browser: ${error.message}`);
         }
     }
@@ -9894,17 +9100,17 @@ async function generatePDF(html, pdfPath, name) {
     while (attempts < maxAttempts) {
         try {
             if (!page || page.isClosed()) {
-                if (causalDebugger) causalDebugger.trace('PAGE_CREATE', { name, attempt: attempts });
+                if (traceOrchestrator) traceOrchestrator.trace('PAGE_CREATE', { name, attempt: attempts });
                 
                 page = await processor.state.browser.newPage();
                 processor.state.pages.set(name, page);
                 
                 page.on('error', err => {
-                    if (causalDebugger) causalDebugger.error(err, { context: 'PAGE_ERROR', name });
+                    if (traceOrchestrator) traceOrchestrator.error(err, { context: 'PAGE_ERROR', name });
                 });
                 
                 page.on('pageerror', err => {
-                    if (causalDebugger) causalDebugger.error(err, { context: 'PAGE_JS_ERROR', name });
+                    if (traceOrchestrator) traceOrchestrator.error(err, { context: 'PAGE_JS_ERROR', name });
                 });
             }
             
@@ -9920,8 +9126,8 @@ async function generatePDF(html, pdfPath, name) {
             
             await page.goto(CONFIG.strings.emptyPageUrl);
             
-            if (causalDebugger) {
-                causalDebugger.trace('PDF_GENERATED', { 
+            if (traceOrchestrator) {
+                traceOrchestrator.trace('PDF_GENERATED', { 
                     name, 
                     path: pdfPath, 
                     attempt: attempts 
@@ -9930,8 +9136,8 @@ async function generatePDF(html, pdfPath, name) {
             break;
             
         } catch (error) {
-            if (causalDebugger) {
-                causalDebugger.error(error, { 
+            if (traceOrchestrator) {
+                traceOrchestrator.error(error, { 
                     context: 'PDF_GENERATION', 
                     name, 
                     attempt: attempts 
@@ -9953,7 +9159,7 @@ async function generatePDF(html, pdfPath, name) {
                 attempts++;
                 if (attempts < maxAttempts) {
                     if (!processor.state.browser || !processor.state.browser.isConnected()) {
-                        if (causalDebugger) causalDebugger.trace('BROWSER_RECONNECT', { name });
+                        if (traceOrchestrator) traceOrchestrator.trace('BROWSER_RECONNECT', { name });
                         processor.state.browser = null;
                         return await generatePDF(html, pdfPath, name);
                     }
@@ -10036,10 +9242,6 @@ async function watch() {
         process.exit(CONFIG.process.exitCode.error);
     }
     
-    
-    // Validate CONFIG before starting build
-    validateConfigPaths();
-    validateConfigNumbers();
 
     // Register build dependencies in pull graph using CONFIG
     for (const file of FILES) {
@@ -10155,9 +9357,7 @@ async function watch() {
             // Ensure all artifacts have materialized
             await artifactBarrier.pull();
             
-            // Apply aggregator morphism defined by CONFIG
-            const aggregator = CONFIG.morphisms.aggregator.apply || generateIndex;
-            const result = aggregator(FILES);
+            const result = CONFIG.morphisms.aggregator.apply(FILES);
             // Pull the lazy write to materialize the index file
             if (result && result.pull) {
                 console.log('[INDEX] Pulling index generation...');
@@ -10168,7 +9368,7 @@ async function watch() {
             }
         }
     }, CONFIG.scheduler.initialBuildPriority);
-    
+
     // Configure file watchers
     // Use watchFile on Windows
     for (const file of FILES) {
@@ -10186,13 +9386,12 @@ async function watch() {
                         // Small delay to ensure files are written
                         await new Promise(resolve => setTimeout(resolve, TIME.TICK))
 
-                        generateIndex(FILES);
+                        renderView({ type: 'document-index' }, FILES);
                     }, CONFIG.watcher.postBuildDelay);
                 }
             });
             
-            // fs.watchFile as fallback with polling
-            fs.watchFile(txtPath, { interval: pull(TIME.TICK) }, (curr, prev) => {
+            fs.watchFile(txtPath, { interval: TIME.TICK }, (curr, prev) => {
                 if (curr.mtime !== prev.mtime && shouldProcessFileChange(txtPath + '_watchfile')) {
                     console.log(`${CONFIG.strings.watchFilePrefix} Detected change in ${file.txt}`);
                     // Use scheduler's debounce mechanism
@@ -10202,7 +9401,7 @@ async function watch() {
                         // Small delay to ensure files are written
                         await new Promise(resolve => setTimeout(resolve, TIME.TICK))
 
-                        generateIndex(FILES);
+                        renderView({ type: 'document-index' }, FILES);
                     }, CONFIG.watcher.postBuildDelay);
                 }
             });
@@ -10229,13 +9428,13 @@ async function watch() {
             (async () => {
                 try {
                     // Initialize lazy telemetry system if not already done
-                    if (!causalDebugger.lazyTelemetry) {
-                        causalDebugger.initializeLazyTelemetry();
+                    if (!traceOrchestrator.lazyTelemetry) {
+                        traceOrchestrator.initializeLazyTelemetry();
                     }
                     
                     // Create a lazy pipeline for telemetry export
                     const telemetryPipeline = new Lazy(() => {
-                        const exportLazy = causalDebugger.lazyTelemetry.value.export;
+                        const exportLazy = traceOrchestrator.lazyTelemetry.value.export;
                         return lazyFS.write(
                             path.join(__dirname, CONFIG.files.telemetryFile),
                             exportLazy.value.json.value
@@ -10246,14 +9445,14 @@ async function watch() {
                     await telemetryPipeline.value.value;
                 } catch (error) {
                     // Don't let telemetry errors crash the build system
-                    causalDebugger.error(error, { context: 'telemetry_export' });
+                    traceOrchestrator.error(error, { context: 'telemetry_export' });
                 }
             })();
         }
     }, CONFIG.process.heartbeatInterval);
     
     // Store intervals for cleanup on shutdown
-    processor.state.intervals = processor.state.intervals || [];
+    if (!processor.state.intervals) processor.state.intervals = [];
     processor.state.intervals.push(statsInterval);
     processor.state.intervals.push(heartbeatInterval);
 }
@@ -10261,13 +9460,13 @@ async function watch() {
 // Handle uncaught exceptions gracefully
 process.on(CONFIG.strings.exceptionEvent, (error) => {
     console.error(CONFIG.strings.criticalErrorPrefix, error);
-    causalDebugger.error(error, { type: CONFIG.strings.exceptionEvent });
+    traceOrchestrator.error(error, { type: CONFIG.strings.exceptionEvent });
     // Don't exit - try to continue running
 });
 
 process.on(CONFIG.strings.rejectionEvent, (reason, promise) => {
     console.error(CONFIG.strings.unhandledRejectionPrefix, reason);
-    causalDebugger.error(new Error(String(reason)), { 
+    traceOrchestrator.error(new Error(String(reason)), { 
         type: CONFIG.strings.rejectionEvent,
         promise: String(promise)
     });
@@ -10333,7 +9532,7 @@ const loadedConfig = loadConfig(profile);
 // Merge with existing CONFIG
 Object.assign(CONFIG, loadedConfig);
 
-// Validate configuration with schema (uses existing causalDebugger instance)
+// Validate configuration with schema (uses existing traceOrchestrator instance)
 const validationResult = validateConfig();
 if (validationResult.warnings.length > 0) {
 }
@@ -10353,7 +9552,7 @@ if (scheduler && scheduler.autoScale) {
     }
     processor.state.intervals.push(scaleInterval);
     
-    causalDebugger.trace('AUTO_SCALE_INIT', {
+    traceOrchestrator.trace('AUTO_SCALE_INIT', {
         profile,
         initialConcurrency: scheduler.maxConcurrent,
         scaling: {
@@ -10406,17 +9605,16 @@ const SELF_HEAL_INTERFACE = {
         if (configPatternValidator.violations) {
             all.push(...configPatternValidator.violations);
         }
-        if (causalDebugger.runtimeViolations) {
-            all.push(...Array.from(causalDebugger.runtimeViolations));
+        if (traceOrchestrator.runtimeViolations) {
+            all.push(...Array.from(traceOrchestrator.runtimeViolations));
         }
         return all;
     },
     
     
     processingCoordinator,
-    causalDebugger,
-    configPatternValidator,
-    proofSystem
+    traceOrchestrator,
+    configPatternValidator
 };
 
 // Export for module usage
@@ -10438,20 +9636,18 @@ if (isValidateOnly) {
         totalViolations += configPatternValidator.violations.length;
     }
     
-    // N.two. Runtime violations from CausalDebugger
-    if (causalDebugger.runtimeViolations.size > 0) {
-        console.error(`[RUNTIME] ${causalDebugger.runtimeViolations.size} runtime violations:`, 
-            Array.from(causalDebugger.runtimeViolations));
-        totalViolations += causalDebugger.runtimeViolations.size;
+    // N.two. Runtime violations from TraceOrchestrator
+    if (traceOrchestrator.runtimeViolations.size > 0) {
+        console.error(`[RUNTIME] ${traceOrchestrator.runtimeViolations.size} runtime violations:`, 
+            Array.from(traceOrchestrator.runtimeViolations));
+        totalViolations += traceOrchestrator.runtimeViolations.size;
     }
     
-    // 3. ProofSystem violations (unproven computations)
-    const unprovenCount = Array.from(proofTrace.keys()).filter(
-        value => !proofSystem.hasProof(value)
-    ).length;
-    if (unprovenCount > 0) {
-        console.error(`[PROOF] ${unprovenCount} unproven computations detected`);
-        totalViolations += unprovenCount;
+    // 3. TraceOrchestrator runtime violations
+    const violations = traceOrchestrator.runtimeViolations.size;
+    if (violations > 0) {
+        console.error(`[RUNTIME] ${violations} runtime violations detected`);
+        totalViolations += violations;
     }
     
     // 4. ProcessingCoordinator resource conflicts
@@ -10475,79 +9671,79 @@ if (isValidateOnly) {
 
         // Full debug interface
         const debug = {
-            trace: (event, context) => causalDebugger.trace(event, context),
-            error: (error, context) => causalDebugger.error(error, context),
-            performance: (label, fn) => causalDebugger.performance(label, fn),
-            getCausalChain: (eventId) => causalDebugger.getCausalChain(eventId),
+            trace: (event, context) => traceOrchestrator.trace(event, context),
+            error: (error, context) => traceOrchestrator.error(error, context),
+            performance: (label, fn) => traceOrchestrator.performance(label, fn),
+            getCausalChain: (eventId) => traceOrchestrator.getCausalChain(eventId),
 
-            getMetrics: () => causalDebugger.getMetrics(),
-            getPerformanceProfile: () => causalDebugger.getPerformanceProfile(),
-            getCriticalPath: () => causalDebugger.getCriticalPath(),
-            detectPatterns: () => causalDebugger.detectPatterns(),
-            buildCausalityGraph: () => causalDebugger.buildCausalityGraph(),
-            predictNext: (currentEvent) => causalDebugger.predictNext(currentEvent),
-            getFailureProbability: (event) => causalDebugger.getFailureProbability(event),
+            getMetrics: () => traceOrchestrator.getMetrics(),
+            getPerformanceProfile: () => traceOrchestrator.getPerformanceProfile(),
+            getCriticalPath: () => traceOrchestrator.getCriticalPath(),
+            detectPatterns: () => traceOrchestrator.detectPatterns(),
+            buildCausalityGraph: () => traceOrchestrator.buildCausalityGraph(),
+            predictNext: (currentEvent) => traceOrchestrator.predictNext(currentEvent),
+            getFailureProbability: (event) => traceOrchestrator.getFailureProbability(event),
 
-            initializeLazyTelemetry: () => causalDebugger.initializeLazyTelemetry(),
-            createTelemetryStream: () => causalDebugger.createTelemetryStream(),
-            exportTelemetry: () => causalDebugger.exportTelemetry(),
-            formatMetrics: (telemetry) => causalDebugger.formatMetrics(telemetry),
-            formatTimeseries: (telemetry) => causalDebugger.formatTimeseries(telemetry),
+            initializeLazyTelemetry: () => traceOrchestrator.initializeLazyTelemetry(),
+            createTelemetryStream: () => traceOrchestrator.createTelemetryStream(),
+            exportTelemetry: () => traceOrchestrator.exportTelemetry(),
+            formatMetrics: (telemetry) => traceOrchestrator.formatMetrics(telemetry),
+            formatTimeseries: (telemetry) => traceOrchestrator.formatTimeseries(telemetry),
 
-            calculateEventRate: (events) => causalDebugger.calculateEventRate(events),
-            calculateErrorRate: (errors) => causalDebugger.calculateErrorRate(errors),
-            calculateMemoryPressure: () => causalDebugger.calculateMemoryPressure(),
-            identifyBottlenecks: () => causalDebugger.identifyBottlenecks(),
-            calculateTaskSuccessRate: () => causalDebugger.calculateTaskSuccessRate(),
-            detectMemoryLeaks: () => causalDebugger.detectMemoryLeaks(),
-            detectPerformanceDegradation: () => causalDebugger.detectPerformanceDegradation(),
-            detectErrorClusters: () => causalDebugger.detectErrorClusters(),
-            detectResourceSpikes: () => causalDebugger.detectResourceSpikes(),
+            calculateEventRate: (events) => traceOrchestrator.calculateEventRate(events),
+            calculateErrorRate: (errors) => traceOrchestrator.calculateErrorRate(errors),
+            calculateMemoryPressure: () => traceOrchestrator.calculateMemoryPressure(),
+            identifyBottlenecks: () => traceOrchestrator.identifyBottlenecks(),
+            calculateTaskSuccessRate: () => traceOrchestrator.calculateTaskSuccessRate(),
+            detectMemoryLeaks: () => traceOrchestrator.detectMemoryLeaks(),
+            detectPerformanceDegradation: () => traceOrchestrator.detectPerformanceDegradation(),
+            detectErrorClusters: () => traceOrchestrator.detectErrorClusters(),
+            detectResourceSpikes: () => traceOrchestrator.detectResourceSpikes(),
 
             events: {
-                all: () => causalDebugger.events,
+                all: () => traceOrchestrator.events,
                 recent: (n = CONFIG.debug.analysis.recentWindowSize) =>
-                    causalDebugger.events.slice(-n),
+                    traceOrchestrator.events.slice(-n),
                 byType: (type) =>
-                    causalDebugger.events.filter(e => e.event.includes(type))
+                    traceOrchestrator.events.filter(e => e.event.includes(type))
             },
 
             errors: {
-                all: () => causalDebugger.errors,
-                getCausalChain: (errorId) => causalDebugger.getCausalChain(errorId),
+                all: () => traceOrchestrator.errors,
+                getCausalChain: (errorId) => traceOrchestrator.getCausalChain(errorId),
                 withChains: () => {
                     const result = [];
-                    for (const [id, error] of causalDebugger.errors) {
+                    for (const [id, error] of traceOrchestrator.errors) {
                         result.push({
                             id,
                             message: error.error.message,
-                            chain: error.causalChain || [],
+                            chain: error.causalChain,
                             stack: error.stack
                         });
                     }
                     return result;
                 },
                 analyze: (errorId) => {
-                    const error = causalDebugger.errors.get(errorId);
+                    const error = traceOrchestrator.errors.get(errorId);
                     if (!error) return null;
                     return {
                         error,
-                        chain: causalDebugger.getCausalChain(errorId),
-                        predictions: causalDebugger.predictNext(error.context?.event)
+                        chain: traceOrchestrator.getCausalChain(errorId),
+                        predictions: traceOrchestrator.predictNext(error.context?.event)
                     };
                 }
             },
 
             causality: {
-                getCausalChain: (eventId) => causalDebugger.getCausalChain(eventId),
-                buildCausalityGraph: () => causalDebugger.buildCausalityGraph(),
-                chains: () => causalDebugger.causality,
+                getCausalChain: (eventId) => traceOrchestrator.getCausalChain(eventId),
+                buildCausalityGraph: () => traceOrchestrator.buildCausalityGraph(),
+                chains: () => traceOrchestrator.causality,
                 trace: (fromEvent, toEvent) => {
                     const chain = [];
                     let current = toEvent;
                     while (current && current !== fromEvent) {
                         chain.unshift(current);
-                        const causes = causalDebugger.causality.get(current);
+                        const causes = traceOrchestrator.causality.get(current);
                         current = causes?.[0];
                     }
                     return chain;
@@ -10555,32 +9751,32 @@ if (isValidateOnly) {
             },
 
             perf: {
-                marks: () => causalDebugger.performanceMarks,
-                slow: () => causalDebugger.identifyBottlenecks(),
-                critical: () => causalDebugger.getCriticalPath(),
-                telemetry: () => causalDebugger.exportTelemetry(),
+                marks: () => traceOrchestrator.performanceMarks,
+                slow: () => traceOrchestrator.identifyBottlenecks(),
+                critical: () => traceOrchestrator.getCriticalPath(),
+                telemetry: () => traceOrchestrator.exportTelemetry(),
                 metrics: () => ({
-                    eventRate: causalDebugger.calculateEventRate(causalDebugger.events),
-                    errorRate: causalDebugger.calculateErrorRate(Array.from(causalDebugger.errors.values())),
-                    memoryPressure: causalDebugger.calculateMemoryPressure(),
-                    successRate: causalDebugger.calculateTaskSuccessRate()
+                    eventRate: traceOrchestrator.calculateEventRate(traceOrchestrator.events),
+                    errorRate: traceOrchestrator.calculateErrorRate(Array.from(traceOrchestrator.errors.values())),
+                    memoryPressure: traceOrchestrator.calculateMemoryPressure(),
+                    successRate: traceOrchestrator.calculateTaskSuccessRate()
                 })
             },
 
             patterns: {
-                detect: () => causalDebugger.detectPatterns(),
-                markov: () => causalDebugger.markovChain,
-                failures: () => causalDebugger.failurePatterns,
-                predict: (event) => causalDebugger.predictNext(event),
-                memoryLeak: () => causalDebugger.detectMemoryLeaks(),
-                perfDegradation: () => causalDebugger.detectPerformanceDegradation(),
-                errorClusters: () => causalDebugger.detectErrorClusters(),
-                resourceSpikes: () => causalDebugger.detectResourceSpikes()
+                detect: () => traceOrchestrator.detectPatterns(),
+                markov: () => traceOrchestrator.markovChain,
+                failures: () => traceOrchestrator.failurePatterns,
+                predict: (event) => traceOrchestrator.predictNext(event),
+                memoryLeak: () => traceOrchestrator.detectMemoryLeaks(),
+                perfDegradation: () => traceOrchestrator.detectPerformanceDegradation(),
+                errorClusters: () => traceOrchestrator.detectErrorClusters(),
+                resourceSpikes: () => traceOrchestrator.detectResourceSpikes()
             },
 
             build: {
                 cache: () => {
-                    const events = causalDebugger.events.filter(e =>
+                    const events = traceOrchestrator.events.filter(e =>
                         e.event.includes('CACHE') || e.event.includes('BUILD')
                     );
                     return {
@@ -10590,7 +9786,7 @@ if (isValidateOnly) {
                     };
                 },
                 pipeline: () => {
-                    const events = causalDebugger.events.filter(e =>
+                    const events = traceOrchestrator.events.filter(e =>
                         e.event.includes('PIPELINE')
                     );
                     return {
@@ -10601,14 +9797,14 @@ if (isValidateOnly) {
                     };
                 },
                 files: () => {
-                    const events = causalDebugger.events.filter(e =>
+                    const events = traceOrchestrator.events.filter(e =>
                         e.event.startsWith('FS_')
                     );
                     return {
                         reads: events.filter(e => e.event === 'FS_READ'),
                         writes: events.filter(e => e.event === 'FS_WRITE'),
                         sizes: events.filter(e => e.event === 'FS_WRITE')
-                            .map(e => ({ path: e.data?.path, size: e.data?.size || 0 }))
+                            .map(e => ({ path: e.data?.path, size: e.data?.size }))
                     };
                 },
                 graph: () => ({
@@ -10623,7 +9819,7 @@ if (isValidateOnly) {
             },
 
             state: {
-                scheduler: () => extractor.extract('scheduler', scheduler),
+                scheduler: () => stateSerializer.serialize('scheduler', scheduler),
                 coordinator: () => ({
                     resources: processingCoordinator.resources.size,
                     conflicts: processingCoordinator.hasResourceConflicts(),
@@ -10631,11 +9827,10 @@ if (isValidateOnly) {
                 }),
                 violations: () => ({
                     config: configPatternValidator.violations,
-                    runtime: Array.from(causalDebugger.runtimeViolations),
-                    proofs: Array.from(proofTrace.keys()).filter(v => !proofSystem.hasProof(v))
+                    runtime: Array.from(traceOrchestrator.runtimeViolations)
                 }),
-                proofs: () => extractor.extract('proofSystem', proofSystem),
-                reflection: () => reflection.introspect(proofSystem)
+                causality: () => stateSerializer.serialize('traceOrchestrator', traceOrchestrator),
+                reflection: () => reflection.introspect(traceOrchestrator)
             },
 
             analyze: {
@@ -10665,7 +9860,7 @@ if (isValidateOnly) {
                 },
 
                 traceBuildPath: (file) => {
-                    const events = causalDebugger.events.filter(e =>
+                    const events = traceOrchestrator.events.filter(e =>
                         e.data?.file === file || e.data?.path?.includes(file)
                     );
                     console.log(`\n[BUILD PATH] ${file}:`);
@@ -10677,13 +9872,13 @@ if (isValidateOnly) {
                 },
 
                 traceCacheInvalid: () => {
-                    const invalidEvents = causalDebugger.events.filter(e =>
+                    const invalidEvents = traceOrchestrator.events.filter(e =>
                         e.event === 'CACHE_HIT_INVALID'
                     );
                     const results = invalidEvents.map(e => ({
                         event: e,
-                        chain: causalDebugger.getCausalChain(e.id),
-                        predictions: causalDebugger.predictNext('CACHE_HIT_INVALID'),
+                        chain: traceOrchestrator.getCausalChain(e.id),
+                        predictions: traceOrchestrator.predictNext('CACHE_HIT_INVALID'),
                         context: e.context || e.data
                     }));
                     console.log(`\n[CACHE INVALID] Found ${invalidEvents.length} invalid cache hits`);
@@ -10697,10 +9892,10 @@ if (isValidateOnly) {
                 },
 
                 findCacheProblem: () => {
-                    const cacheEvents = causalDebugger.events.filter(e => e.event.includes('CACHE'));
-                    const patterns = causalDebugger.detectPatterns();
-                    const metrics = causalDebugger.getMetrics();
-                    const critical = causalDebugger.getCriticalPath();
+                    const cacheEvents = traceOrchestrator.events.filter(e => e.event.includes('CACHE'));
+                    const patterns = traceOrchestrator.detectPatterns();
+                    const metrics = traceOrchestrator.getMetrics();
+                    const critical = traceOrchestrator.getCriticalPath();
 
                     console.log('\n[CACHE ANALYSIS]');
                     console.log(`Total cache events: ${cacheEvents.length}`);
@@ -10711,7 +9906,7 @@ if (isValidateOnly) {
 
                     const invalidChains = cacheEvents
                         .filter(e => e.event === 'CACHE_HIT_INVALID')
-                        .map(e => causalDebugger.getCausalChain(e.id));
+                        .map(e => traceOrchestrator.getCausalChain(e.id));
 
                     if (invalidChains.length > 0) {
                         console.log('\nInvalid cache hit chains:');
@@ -10720,7 +9915,7 @@ if (isValidateOnly) {
                         });
                     }
 
-                    const predictions = causalDebugger.predictNext('CACHE_HIT_INVALID');
+                    const predictions = traceOrchestrator.predictNext('CACHE_HIT_INVALID');
                     if (predictions.length > 0) {
                         console.log('\nPredicted after CACHE_HIT_INVALID:');
                         predictions.forEach(p => {
@@ -10733,25 +9928,28 @@ if (isValidateOnly) {
             },
 
             clear: () => {
-                causalDebugger.events = [];
-                causalDebugger.errors.clear();
-                causalDebugger.causality.clear();
-                causalDebugger.performanceMarks.clear();
+                traceOrchestrator.events = [];
+                traceOrchestrator.errors.clear();
+                traceOrchestrator.causality.clear();
+                traceOrchestrator.performanceMarks.clear();
                 console.log('[DEBUG] Cleared all debug data');
             },
 
             help: () => {
-                console.log('\nDebug Interface Commands:');
-                console.log('  debug.events.*      - Event tracking (all, recent, byType, trace, mark)');
-                console.log('  debug.errors.*      - Error analysis (all, recent, withChains, analyze)');
-                console.log('  debug.causality.*   - Causal chains (get, chains, trace)');
-                console.log('  debug.perf.*        - Performance (marks, slow, critical, telemetry, metrics)');
-                console.log('  debug.patterns.*    - Pattern detection (detect, markov, predict, memoryLeak)');
-                console.log('  debug.build.*       - Build debugging (cache, pipeline, files, graph)');
-                console.log('  debug.state.*       - System state (scheduler, coordinator, violations)');
-                console.log('  debug.analyze.*     - Analysis tools (whyNoFiles, traceBuildPath)');
-                console.log('  debug.clear()       - Clear all debug data');
-                console.log('  debug.help()        - Show this help');
+                return {
+                    commands: {
+                        'events.*': 'Event tracking (all, recent, byType, trace, mark)',
+                        'errors.*': 'Error analysis (all, recent, withChains, analyze)',
+                        'causality.*': 'Causal chains (get, chains, trace)',
+                        'perf.*': 'Performance (marks, slow, critical, telemetry, metrics)',
+                        'patterns.*': 'Pattern detection (detect, markov, predict, memoryLeak)',
+                        'build.*': 'Build debugging (cache, pipeline, files, graph)',
+                        'state.*': 'System state (scheduler, coordinator, violations)',
+                        'analyze.*': 'Analysis tools (whyNoFiles, traceBuildPath)',
+                        'clear()': 'Clear all debug data',
+                        'help()': 'Show this help'
+                    }
+                };
             }
         };
 
@@ -10776,226 +9974,173 @@ if (isValidateOnly) {
         process.exit(0);
     }
 
-    // Socket Query Infrastructure - compression, streaming, multiplexing
-    // Delta compression for large responses
-    class DeltaCache {
-        constructor(maxSize = 100) {
-            this.cache = new Map();
-            this.maxSize = maxSize;
-        }
-
-        computeDelta(key, newData) {
-            const cached = this.cache.get(key);
-            if (!cached) {
-                this.set(key, newData);
-                return { type: 'full', data: newData };
-            }
-
-            const delta = this.diff(cached, newData);
-            if (JSON.stringify(delta).length < JSON.stringify(newData).length * 0.7) {
-                this.set(key, newData);
-                return { type: 'delta', data: delta };
-            }
-
-            this.set(key, newData);
-            return { type: 'full', data: newData };
-        }
-
-        diff(old, fresh) {
-            if (typeof old !== 'object' || typeof fresh !== 'object') {
-                return fresh !== old ? fresh : undefined;
-            }
-
-            const delta = {};
-            for (const key in fresh) {
-                const change = this.diff(old[key], fresh[key]);
-                if (change !== undefined) delta[key] = change;
-            }
-            for (const key in old) {
-                if (!(key in fresh)) delta[key] = null;
-            }
-            return Object.keys(delta).length > 0 ? delta : undefined;
-        }
-
-        set(key, value) {
-            if (this.cache.size >= this.maxSize) {
-                const firstKey = this.cache.keys().next().value;
-                this.cache.delete(firstKey);
-            }
-            this.cache.set(key, JSON.parse(JSON.stringify(value)));
-        }
-
-        clear() {
-            this.cache.clear();
-        }
-    }
-
-    // Query priority queue
-    class QueryQueue {
-        constructor() {
-            this.high = [];
-            this.normal = [];
-            this.low = [];
-        }
-
-        enqueue(query, priority = 'normal') {
-            const queue = this[priority] || this.normal;
-            queue.push(query);
-        }
-
-        dequeue() {
-            return this.high.shift() || this.normal.shift() || this.low.shift();
-        }
-
-        size() {
-            return this.high.length + this.normal.length + this.low.length;
-        }
-    }
-
-    // Server-side socket infrastructure instances
-    const deltaCache = new DeltaCache();
-    const queryQueue = new QueryQueue();
-
-    // Interactive debug interface
+    // Interactive debug API
     if (process.env.DEBUG || process.argv.includes('--debug')) {
-        console.log('\n[DEBUG] CausalDebugger Interface Active');
-        console.log('=======================================');
+        const buildDebugAPI = () => ({
+            // Direct instrumentation
+            trace: (event, ctx) => traceOrchestrator.trace(event, ctx),
+            error: (err, ctx) => traceOrchestrator.error(err, ctx),
+            performance: (label, fn) => traceOrchestrator.performance(label, fn),
+            getCausalChain: (id) => traceOrchestrator.getCausalChain(id),
 
-        global.debug = {
-            trace: (event, context) => causalDebugger.trace(event, context),
-            error: (error, context) => causalDebugger.error(error, context),
-            performance: (label, fn) => causalDebugger.performance(label, fn),
-            getCausalChain: (eventId) => causalDebugger.getCausalChain(eventId),
+            // Metrics and profiling
+            getMetrics: () => traceOrchestrator.getMetrics(),
+            getPerformanceProfile: () => traceOrchestrator.getPerformanceProfile(),
+            getCriticalPath: () => traceOrchestrator.getCriticalPath(),
+            detectPatterns: () => traceOrchestrator.detectPatterns(),
+            buildCausalityGraph: () => traceOrchestrator.buildCausalityGraph(),
+            predictNext: (evt) => traceOrchestrator.predictNext(evt),
+            getFailureProbability: (evt) => traceOrchestrator.getFailureProbability(evt),
 
-            getMetrics: () => causalDebugger.getMetrics(),
-            getPerformanceProfile: () => causalDebugger.getPerformanceProfile(),
-            getCriticalPath: () => causalDebugger.getCriticalPath(),
-            detectPatterns: () => causalDebugger.detectPatterns(),
-            buildCausalityGraph: () => causalDebugger.buildCausalityGraph(),
-            predictNext: (currentEvent) => causalDebugger.predictNext(currentEvent),
-            getFailureProbability: (event) => causalDebugger.getFailureProbability(event),
+            // Computation metrics
+            calculateEventRate: (events) => traceOrchestrator.calculateEventRate(events),
+            calculateErrorRate: (errors) => traceOrchestrator.calculateErrorRate(errors),
+            calculateMemoryPressure: () => traceOrchestrator.calculateMemoryPressure(),
+            calculateTaskSuccessRate: () => traceOrchestrator.calculateTaskSuccessRate(),
+            identifyBottlenecks: () => traceOrchestrator.identifyBottlenecks(),
 
-            initializeLazyTelemetry: () => causalDebugger.initializeLazyTelemetry(),
-            createTelemetryStream: () => causalDebugger.createTelemetryStream(),
-            exportTelemetry: () => causalDebugger.exportTelemetry(),
-            formatMetrics: (telemetry) => causalDebugger.formatMetrics(telemetry),
-            formatTimeseries: (telemetry) => causalDebugger.formatTimeseries(telemetry),
+            // Pattern detection
+            detectMemoryLeaks: () => traceOrchestrator.detectMemoryLeaks(),
+            detectPerformanceDegradation: () => traceOrchestrator.detectPerformanceDegradation(),
+            detectErrorClusters: () => traceOrchestrator.detectErrorClusters(),
+            detectResourceSpikes: () => traceOrchestrator.detectResourceSpikes(),
 
-            calculateEventRate: (events) => causalDebugger.calculateEventRate(events),
-            calculateErrorRate: (errors) => causalDebugger.calculateErrorRate(errors),
-            calculateMemoryPressure: () => causalDebugger.calculateMemoryPressure(),
-            identifyBottlenecks: () => causalDebugger.identifyBottlenecks(),
-            calculateTaskSuccessRate: () => causalDebugger.calculateTaskSuccessRate(),
-            detectMemoryLeaks: () => causalDebugger.detectMemoryLeaks(),
-            detectPerformanceDegradation: () => causalDebugger.detectPerformanceDegradation(),
-            detectErrorClusters: () => causalDebugger.detectErrorClusters(),
-            detectResourceSpikes: () => causalDebugger.detectResourceSpikes(),
+            // Telemetry export
+            telemetry: {
+                init: () => traceOrchestrator.initializeLazyTelemetry(),
+                stream: () => traceOrchestrator.createTelemetryStream(),
+                export: () => traceOrchestrator.exportTelemetry(),
+                formatMetrics: (data) => traceOrchestrator.formatMetrics(data),
+                formatTimeseries: (data) => traceOrchestrator.formatTimeseries(data)
+            },
 
+            // Event inspection
             events: {
-                all: () => causalDebugger.events,
+                all: () => traceOrchestrator.events,
                 recent: (n = CONFIG.debug.analysis.recentWindowSize) =>
-                    causalDebugger.events.slice(-n),
+                    traceOrchestrator.events.slice(-n),
                 byType: (type) =>
-                    causalDebugger.events.filter(e => e.event.includes(type))
-            },
-
-            errors: {
-                all: () => causalDebugger.errors,
-                getCausalChain: (errorId) => causalDebugger.getCausalChain(errorId),
-                withChains: () => {
-                    const result = [];
-                    for (const [id, error] of causalDebugger.errors) {
-                        result.push({
-                            id,
-                            message: error.error.message,
-                            chain: error.causalChain || [],
-                            stack: error.stack
-                        });
-                    }
-                    return result;
-                },
-                analyze: (errorId) => {
-                    const error = causalDebugger.errors.get(errorId);
-                    if (!error) return null;
-                    return {
-                        error,
-                        chain: causalDebugger.getCausalChain(errorId),
-                        predictions: causalDebugger.predictNext(error.context?.event)
-                    };
-                }
-            },
-
-            causality: {
-                getCausalChain: (eventId) => causalDebugger.getCausalChain(eventId),
-                buildCausalityGraph: () => causalDebugger.buildCausalityGraph(),
-                chains: () => causalDebugger.causality,
-                trace: (fromEvent, toEvent) => {
+                    traceOrchestrator.events.filter(e => e.event.includes(type)),
+                byFile: (file) => traceOrchestrator.events.filter(e =>
+                    e.data?.file === file || e.data?.path?.includes(file)),
+                chain: (id) => traceOrchestrator.getCausalChain(id),
+                trace: (from, to) => {
                     const chain = [];
-                    let current = toEvent;
-                    while (current && current !== fromEvent) {
+                    let current = to;
+                    while (current && current !== from) {
                         chain.unshift(current);
-                        const causes = causalDebugger.causality.get(current);
+                        const causes = traceOrchestrator.causality.get(current);
                         current = causes?.[0];
                     }
                     return chain;
                 }
             },
 
+            // Error inspection
+            errors: {
+                all: () => Array.from(traceOrchestrator.errors.values()),
+                recent: (n = THRESHOLDS.TOP_RESULTS) =>
+                    Array.from(traceOrchestrator.errors.values()).slice(-n),
+                withChains: () => Array.from(traceOrchestrator.errors.entries())
+                    .map(([id, err]) => ({
+                        id,
+                        message: err.error.message,
+                        chain: err.causalChain,
+                        stack: err.stack,
+                        timestamp: err.timestamp
+                    })),
+                analyze: (id) => {
+                    const err = traceOrchestrator.errors.get(id);
+                    return err ? {
+                        error: err,
+                        chain: traceOrchestrator.getCausalChain(id),
+                        predictions: traceOrchestrator.predictNext(err.context?.event)
+                    } : null;
+                },
+                clusters: () => traceOrchestrator.detectErrorClusters(),
+                getCausalChain: (id) => traceOrchestrator.getCausalChain(id)
+            },
+
+            // Causality analysis
+            causality: {
+                chains: () => traceOrchestrator.causality,
+                graph: () => traceOrchestrator.buildCausalityGraph(),
+                trace: (from, to) => {
+                    const chain = [];
+                    let current = to;
+                    while (current && current !== from) {
+                        chain.unshift(current);
+                        const causes = traceOrchestrator.causality.get(current);
+                        current = causes?.[0];
+                    }
+                    return chain;
+                },
+                getCausalChain: (id) => traceOrchestrator.getCausalChain(id)
+            },
+
+            // Performance inspection
             perf: {
-                marks: () => causalDebugger.performanceMarks,
-                slow: () => causalDebugger.identifyBottlenecks(),
-                critical: () => causalDebugger.getCriticalPath(),
-                telemetry: () => causalDebugger.exportTelemetry(),
+                marks: () => traceOrchestrator.performanceMarks,
+                profile: () => traceOrchestrator.getPerformanceProfile(),
+                bottlenecks: () => traceOrchestrator.identifyBottlenecks(),
+                critical: () => traceOrchestrator.getCriticalPath(),
+                slowest: (n = THRESHOLDS.TOP_RESULTS) =>
+                    Array.from(traceOrchestrator.performanceMarks.entries())
+                        .sort((a, b) => b[1].duration - a[1].duration)
+                        .slice(0, n)
+                        .map(([label, data]) => ({ label, ...data })),
                 metrics: () => ({
-                    eventRate: causalDebugger.calculateEventRate(causalDebugger.events),
-                    errorRate: causalDebugger.calculateErrorRate(Array.from(causalDebugger.errors.values())),
-                    memoryPressure: causalDebugger.calculateMemoryPressure(),
-                    successRate: causalDebugger.calculateTaskSuccessRate()
+                    eventRate: traceOrchestrator.calculateEventRate(traceOrchestrator.events),
+                    errorRate: traceOrchestrator.calculateErrorRate(Array.from(traceOrchestrator.errors.values())),
+                    memoryPressure: traceOrchestrator.calculateMemoryPressure(),
+                    taskSuccess: traceOrchestrator.calculateTaskSuccessRate()
                 })
             },
 
+            // Pattern recognition
             patterns: {
-                detect: () => causalDebugger.detectPatterns(),
-                markov: () => causalDebugger.markovChain,
-                failures: () => causalDebugger.failurePatterns,
-                predict: (event) => causalDebugger.predictNext(event),
-                memoryLeak: () => causalDebugger.detectMemoryLeaks(),
-                perfDegradation: () => causalDebugger.detectPerformanceDegradation(),
-                errorClusters: () => causalDebugger.detectErrorClusters(),
-                resourceSpikes: () => causalDebugger.detectResourceSpikes()
+                detect: () => traceOrchestrator.detectPatterns(),
+                memoryLeaks: () => traceOrchestrator.detectMemoryLeaks(),
+                perfDegradation: () => traceOrchestrator.detectPerformanceDegradation(),
+                errorClusters: () => traceOrchestrator.detectErrorClusters(),
+                resourceSpikes: () => traceOrchestrator.detectResourceSpikes(),
+                markov: () => traceOrchestrator.markovChain,
+                failures: () => traceOrchestrator.failurePatterns,
+                predict: (event) => traceOrchestrator.predictNext(event),
+                failureProb: (event) => traceOrchestrator.getFailureProbability(event)
             },
 
+            // Build system inspection
             build: {
                 cache: () => {
-                    const events = causalDebugger.events.filter(e =>
-                        e.event.includes('CACHE') || e.event.includes('BUILD')
-                    );
+                    const events = traceOrchestrator.events.filter(e =>
+                        e.event.includes('CACHE') || e.event.includes('BUILD'));
                     return {
                         hits: events.filter(e => e.event.includes('CACHE_HIT')),
                         misses: events.filter(e => e.event.includes('CACHE_MISS')),
+                        invalid: events.filter(e => e.event === 'CACHE_HIT_INVALID'),
+                        stores: events.filter(e => e.event === 'CACHE_STORE'),
                         builds: events.filter(e => e.event === 'BUILD')
                     };
                 },
                 pipeline: () => {
-                    const events = causalDebugger.events.filter(e =>
-                        e.event.includes('PIPELINE')
-                    );
-                    return {
-                        read: events.filter(e => e.event === 'PIPELINE_READ'),
-                        parse: events.filter(e => e.event === 'PIPELINE_PARSE'),
-                        transform: events.filter(e => e.event === 'PIPELINE_TRANSFORM'),
-                        write: events.filter(e => e.event === 'PIPELINE_WRITE')
-                    };
+                    const stages = ['READ', 'PARSE', 'TRANSFORM', 'WRITE'];
+                    const events = traceOrchestrator.events.filter(e =>
+                        e.event.includes('PIPELINE'));
+                    return stages.reduce((acc, stage) => {
+                        acc[stage.toLowerCase()] = events.filter(e =>
+                            e.event === `PIPELINE_${stage}`);
+                        return acc;
+                    }, {});
                 },
                 files: () => {
-                    const events = causalDebugger.events.filter(e =>
-                        e.event.startsWith('FS_')
-                    );
+                    const fsEvents = traceOrchestrator.events.filter(e =>
+                        e.event.startsWith('FS_'));
                     return {
-                        reads: events.filter(e => e.event === 'FS_READ'),
-                        writes: events.filter(e => e.event === 'FS_WRITE'),
-                        sizes: events.filter(e => e.event === 'FS_WRITE')
-                            .map(e => ({ path: e.data?.path, size: e.data?.size || 0 }))
+                        reads: fsEvents.filter(e => e.event === 'FS_READ'),
+                        writes: fsEvents.filter(e => e.event === 'FS_WRITE'),
+                        sizes: fsEvents.filter(e => e.event === 'FS_WRITE')
+                            .map(e => ({ path: e.data?.path, size: e.data?.size }))
                     };
                 },
                 graph: () => ({
@@ -11003,14 +10148,17 @@ if (isValidateOnly) {
                     evaluated: Array.from(pullGraph.nodes.entries())
                         .filter(([_, node]) => node.evaluated)
                         .map(([key]) => key),
-                    lazy: Array.from(pullGraph.nodes.entries())
+                    pending: Array.from(pullGraph.nodes.entries())
                         .filter(([_, node]) => !node.evaluated)
                         .map(([key]) => key)
-                })
+                }),
+                tracePath: (file) => traceOrchestrator.events.filter(e =>
+                    e.data?.file === file || e.data?.path?.includes(file))
             },
 
+            // System state
             state: {
-                scheduler: () => extractor.extract('scheduler', scheduler),
+                scheduler: () => stateSerializer.serialize('scheduler', scheduler),
                 coordinator: () => ({
                     resources: processingCoordinator.resources.size,
                     conflicts: processingCoordinator.hasResourceConflicts(),
@@ -11018,283 +10166,124 @@ if (isValidateOnly) {
                 }),
                 violations: () => ({
                     config: configPatternValidator.violations,
-                    runtime: Array.from(causalDebugger.runtimeViolations),
-                    proofs: Array.from(proofTrace.keys()).filter(v => !proofSystem.hasProof(v))
+                    runtime: Array.from(traceOrchestrator.runtimeViolations)
                 }),
-                proofs: () => extractor.extract('proofSystem', proofSystem),
-                reflection: () => reflection.introspect(proofSystem)
+                telemetry: () => stateSerializer.serialize('traceOrchestrator', traceOrchestrator),
+                reflect: () => reflection.introspect(traceOrchestrator)
             },
 
+            // Diagnostic analysis
             analyze: {
                 whyNoFiles: () => {
-                    console.log('\n[ANALYSIS] Why no output files?');
-                    const cache = debug.build.cache();
-                    const pipeline = debug.build.pipeline();
-                    const files = debug.build.files();
+                    const cache = global.debug.build.cache();
+                    const pipeline = global.debug.build.pipeline();
+                    const files = global.debug.build.files();
 
-                    console.log(`  Cache hits: ${cache.hits.length}`);
-                    console.log(`  Cache misses: ${cache.misses.length}`);
-                    console.log(`  Pipeline transforms: ${pipeline.transform.length}`);
-                    console.log(`  File writes: ${files.writes.length}`);
-
-                    if (files.writes.length > 0) {
-                        console.log('  Written files:');
-                        files.sizes.forEach(f => {
-                            console.log(`    ${f.path}: ${f.size} bytes`);
-                        });
-                    }
+                    const report = {
+                        cache: {
+                            hits: cache.hits.length,
+                            misses: cache.misses.length,
+                            invalid: cache.invalid.length
+                        },
+                        pipeline: {
+                            reads: pipeline.read.length,
+                            parses: pipeline.parse.length,
+                            transforms: pipeline.transform.length,
+                            writes: pipeline.write.length
+                        },
+                        files: {
+                            reads: files.reads.length,
+                            writes: files.writes.length,
+                            sizes: files.sizes
+                        }
+                    };
 
                     if (cache.hits.length > 0 && files.writes.length === 0) {
-                        console.log('  ISSUE: Cache hits but no file writes - cache may be stale');
+                        report.issue = 'Cache hits without writes - stale cache';
                     }
 
-                    return { cache, pipeline, files };
+                    return report;
                 },
-
-                traceBuildPath: (file) => {
-                    const events = causalDebugger.events.filter(e =>
-                        e.data?.file === file || e.data?.path?.includes(file)
-                    );
-                    console.log(`\n[BUILD PATH] ${file}:`);
-                    events.forEach(e => {
-                        console.log(`  ${new Date(e.timestamp).toISOString()}: ${e.event}`);
-                        if (e.data) console.log(`    Data:`, e.data);
-                    });
-                    return events;
+                traceBuild: (file) => {
+                    const events = traceOrchestrator.events.filter(e =>
+                        e.data?.file === file || e.data?.path?.includes(file));
+                    return events.map(e => ({
+                        timestamp: e.timestamp,
+                        event: e.event,
+                        data: e.data,
+                        parent: e.parent
+                    }));
                 },
-
-                traceCacheInvalid: () => {
-                    const invalidEvents = causalDebugger.events.filter(e =>
-                        e.event === 'CACHE_HIT_INVALID'
-                    );
-                    const results = invalidEvents.map(e => ({
-                        event: e,
-                        chain: causalDebugger.getCausalChain(e.id),
-                        predictions: causalDebugger.predictNext('CACHE_HIT_INVALID'),
+                cacheInvalid: () => {
+                    const invalid = traceOrchestrator.events.filter(e =>
+                        e.event === 'CACHE_HIT_INVALID');
+                    return invalid.map(e => ({
+                        id: e.id,
+                        timestamp: e.timestamp,
+                        chain: traceOrchestrator.getCausalChain(e.id),
+                        predictions: traceOrchestrator.predictNext('CACHE_HIT_INVALID'),
                         context: e.context || e.data
                     }));
-                    console.log(`\n[CACHE INVALID] Found ${invalidEvents.length} invalid cache hits`);
-                    results.forEach(r => {
-                        console.log(`  Event ID: ${r.event.id}`);
-                        console.log(`  Context:`, r.context);
-                        console.log(`  Causal chain: ${r.chain.map(c => c.event).join(' -> ')}`);
-                        console.log(`  Predictions:`, r.predictions);
-                    });
-                    return results;
                 },
+                cacheSummary: () => {
+                    const cache = traceOrchestrator.events.filter(e =>
+                        e.event.includes('CACHE'));
+                    const types = ['CACHE_HIT_INVALID', 'CACHE_HIT', 'CACHE_MISS', 'CACHE_STORE'];
+                    const counts = types.reduce((acc, type) => {
+                        acc[type] = cache.filter(e => e.event === type).length;
+                        return acc;
+                    }, {});
 
-                findCacheProblem: () => {
-                    const cacheEvents = causalDebugger.events.filter(e => e.event.includes('CACHE'));
-                    const patterns = causalDebugger.detectPatterns();
-                    const metrics = causalDebugger.getMetrics();
-                    const critical = causalDebugger.getCriticalPath();
-
-                    console.log('\n[CACHE ANALYSIS]');
-                    console.log(`Total cache events: ${cacheEvents.length}`);
-                    console.log(`Invalid hits: ${cacheEvents.filter(e => e.event === 'CACHE_HIT_INVALID').length}`);
-                    console.log(`Valid hits: ${cacheEvents.filter(e => e.event === 'CACHE_HIT').length}`);
-                    console.log(`Misses: ${cacheEvents.filter(e => e.event === 'CACHE_MISS').length}`);
-                    console.log(`Stores: ${cacheEvents.filter(e => e.event === 'CACHE_STORE').length}`);
-
-                    const invalidChains = cacheEvents
+                    const invalidChains = cache
                         .filter(e => e.event === 'CACHE_HIT_INVALID')
-                        .map(e => causalDebugger.getCausalChain(e.id));
+                        .map(e => traceOrchestrator.getCausalChain(e.id));
 
-                    if (invalidChains.length > 0) {
-                        console.log('\nInvalid cache hit chains:');
-                        invalidChains.forEach(chain => {
-                            console.log(`  ${chain.map(c => c.event).join(' -> ')}`);
-                        });
-                    }
-
-                    const predictions = causalDebugger.predictNext('CACHE_HIT_INVALID');
-                    if (predictions.length > 0) {
-                        console.log('\nPredicted after CACHE_HIT_INVALID:');
-                        predictions.forEach(p => {
-                            console.log(`  ${p.event}: ${(p.probability * 100).toFixed(1)}%`);
-                        });
-                    }
-
-                    return { cacheEvents, patterns, metrics, critical, invalidChains, predictions };
+                    return {
+                        total: cache.length,
+                        counts,
+                        invalidChains,
+                        predictions: traceOrchestrator.predictNext('CACHE_HIT_INVALID')
+                    };
                 }
             },
 
+            // Utilities
             clear: () => {
-                causalDebugger.events = [];
-                causalDebugger.errors.clear();
-                causalDebugger.causality.clear();
-                causalDebugger.performanceMarks.clear();
-                console.log('[DEBUG] Cleared all debug data');
+                traceOrchestrator.events = [];
+                traceOrchestrator.errors.clear();
+                traceOrchestrator.causality.clear();
+                traceOrchestrator.performanceMarks.clear();
+                return { cleared: true, timestamp: Date.now() };
             },
 
-            help: () => {
-                console.log('\nDebug Interface Commands:');
-                console.log('  debug.events.*      - Event tracking (all, recent, byType, trace, mark)');
-                console.log('  debug.errors.*      - Error analysis (all, recent, withChains, analyze)');
-                console.log('  debug.causality.*   - Causal chains (get, chains, trace)');
-                console.log('  debug.perf.*        - Performance (marks, slow, critical, telemetry, metrics)');
-                console.log('  debug.patterns.*    - Pattern detection (detect, markov, predict, memoryLeak)');
-                console.log('  debug.build.*       - Build debugging (cache, pipeline, files, graph)');
-                console.log('  debug.state.*       - System state (scheduler, coordinator, violations)');
-                console.log('  debug.analyze.*     - Analysis tools (whyNoFiles, traceBuildPath)');
-                console.log('  debug.clear()       - Clear all debug data');
-                console.log('  debug.help()        - Show this help');
-            }
-        };
+            help: () => ({
+                sections: {
+                    direct: ['trace', 'error', 'performance', 'getCausalChain'],
+                    metrics: ['getMetrics', 'getPerformanceProfile', 'getCriticalPath', 'detectPatterns', 'buildCausalityGraph', 'predictNext', 'getFailureProbability'],
+                    computation: ['calculateEventRate', 'calculateErrorRate', 'calculateMemoryPressure', 'calculateTaskSuccessRate', 'identifyBottlenecks'],
+                    detection: ['detectMemoryLeaks', 'detectPerformanceDegradation', 'detectErrorClusters', 'detectResourceSpikes'],
+                    telemetry: ['telemetry.init', 'telemetry.stream', 'telemetry.export', 'telemetry.formatMetrics', 'telemetry.formatTimeseries'],
+                    events: ['events.all', 'events.recent', 'events.byType', 'events.byFile', 'events.chain', 'events.trace'],
+                    errors: ['errors.all', 'errors.recent', 'errors.withChains', 'errors.analyze', 'errors.clusters', 'errors.getCausalChain'],
+                    causality: ['causality.chains', 'causality.graph', 'causality.trace', 'causality.getCausalChain'],
+                    perf: ['perf.marks', 'perf.profile', 'perf.bottlenecks', 'perf.critical', 'perf.slowest', 'perf.metrics'],
+                    patterns: ['patterns.detect', 'patterns.memoryLeaks', 'patterns.perfDegradation', 'patterns.errorClusters', 'patterns.resourceSpikes', 'patterns.markov', 'patterns.failures', 'patterns.predict', 'patterns.failureProb'],
+                    build: ['build.cache', 'build.pipeline', 'build.files', 'build.graph', 'build.tracePath'],
+                    state: ['state.scheduler', 'state.coordinator', 'state.violations', 'state.telemetry', 'state.reflect'],
+                    analyze: ['analyze.whyNoFiles', 'analyze.traceBuild', 'analyze.cacheInvalid', 'analyze.cacheSummary'],
+                    util: ['clear', 'help']
+                }
+            })
+        });
 
+        global.debug = buildDebugAPI();
         global.d = global.debug;
-
-        console.log('Debug interface ready. Use debug.help() for commands.');
-        console.log('Quick analysis: debug.analyze.whyNoFiles()');
-        console.log('=======================================\n');
     }
-
-    // Socket server with compression, multiplexing, prioritization, and delta caching
-    function createQueryServer(debuggerRef, getFullDebugInterface) {
-        return net.createServer((socket) => {
-        let clientBuffer = '';
-        const socketId = crypto.randomBytes(8).toString('hex');
-
-        // Process queued queries with priority scheduling
-        const processQueue = async () => {
-            while (queryQueue.size() > 0) {
-                const queued = queryQueue.dequeue();
-                try {
-                    const result = await executeQuery(queued.query, queued.args, queued.cacheKey);
-                    sendResponse(socket, queued.id, result);
-                } catch (e) {
-                    sendError(socket, queued.id, e.message);
-                }
-            }
-        };
-
-        socket.on('data', (data) => {
-            clientBuffer += data.toString();
-            const messages = clientBuffer.split('\n');
-            clientBuffer = messages.pop();
-
-            messages.forEach(async (msg) => {
-                if (!msg) return;
-                try {
-                    const request = JSON.parse(msg);
-
-                    if (request.type === 'batch') {
-                        // Enqueue batch queries with priority
-                        request.queries.forEach(q => {
-                            queryQueue.enqueue({
-                                id: q.id,
-                                query: q.query,
-                                args: q.args,
-                                cacheKey: `${socketId}-${q.query}-${JSON.stringify(q.args)}`
-                            }, request.priority || 'normal');
-                        });
-                        processQueue();
-                    } else {
-                        // Enqueue single query with priority
-                        const cacheKey = `${socketId}-${request.query}-${JSON.stringify(request.args)}`;
-                        queryQueue.enqueue({
-                            id: request.id,
-                            query: request.query,
-                            args: request.args,
-                            cacheKey
-                        }, request.priority || 'normal');
-                        processQueue();
-                    }
-                } catch (e) {
-                    sendError(socket, request.id, e.message);
-                }
-            });
-        });
-
-        socket.on('error', (err) => {
-            console.error('[Socket Server] Client error:', err.message);
-        });
-
-        async function executeQuery(queryPath, args, cacheKey) {
-            const parts = queryPath.split('.');
-            let target = getFullDebugInterface();
-
-            // Check for extractor queries
-            if (parts[0] === 'extract' && parts.length === 2) {
-                const extractorName = parts[1];
-                const extracted = extractor.extract(extractorName, target);
-                if (extracted) {
-                    return { type: 'full', data: extracted };
-                }
-            }
-
-            for (const part of parts) {
-                if (!target[part]) {
-                    throw new Error(`Unknown query path: ${queryPath}`);
-                }
-                target = target[part];
-            }
-
-            let result;
-            if (typeof target === 'function') {
-                result = await target(...args);
-            } else {
-                result = target;
-            }
-
-            // Apply delta compression for large results
-            const resultStr = JSON.stringify(result);
-            if (resultStr.length > 512) {
-                return deltaCache.computeDelta(cacheKey, result);
-            }
-
-            return { type: 'full', data: result };
-        }
-
-        function sendResponse(socket, id, result) {
-            const resultStr = JSON.stringify(result);
-
-            // Compress if result is large
-            if (resultStr.length > 1024) {
-                const compressed = zlib.gzipSync(resultStr);
-                socket.write(JSON.stringify({
-                    id,
-                    compressed: true,
-                    data: compressed.toString('base64')
-                }) + '\n\n');
-            } else {
-                socket.write(JSON.stringify({
-                    id,
-                    compressed: false,
-                    data: resultStr
-                }) + '\n\n');
-            }
-        }
-
-        function sendError(socket, id, message) {
-            socket.write(JSON.stringify({
-                id,
-                error: message
-            }) + '\n\n');
-        }
-        });
-    }
-
-    const queryServer = createQueryServer(causalDebugger, () => global.debug);
-
-    queryServer.listen(9999, '127.0.0.1', () => {
-        console.log('[Socket Server] Listening on port 9999');
-    });
-
-    queryServer.on('error', (err) => {
-        if (err.code === 'EADDRINUSE') {
-            console.error('[Socket Server] Port 9999 already in use');
-        } else {
-            console.error('[Socket Server] Error:', err.message);
-        }
-    });
 
     process.on('SIGINT', () => {
-        queryServer.close();
         process.exit(0);
     });
 
-    // Start the watch process
     watch().catch(error => {
         console.error(CONFIG.strings.startupFailedMessage, error);
         lockManager.release();
