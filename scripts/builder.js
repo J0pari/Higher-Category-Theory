@@ -716,66 +716,40 @@ class PullPromise {
 // Pull-based cache that only computes when accessed
 class PullCache {
     constructor(generator) {
-        this.cache = new Map();
         this.generator = generator;
-
-        // Integrated cache pipelines using Kleisli composition
-        this.warm = Pipeline.kleisli(
-            keys => new Lazy(() => {
-                traceOrchestrator.trace('CACHE_WARM_START', { count: keys.length });
-                return keys;
-            }),
-            keys => new PullPromise(async () => {
-                const results = await Promise.all(
-                    keys.map(key => this.get(key))
-                );
-                return { keys, results };
-            }),
-            warmed => new Lazy(() => {
-                traceOrchestrator.trace('CACHE_WARM_COMPLETE', { count: warmed.keys.length });
-                return warmed;
-            })
-        );
-
-        this.invalidate = Pipeline.kleisli(
-            pattern => new Lazy(() => {
-                const keys = Array.from(this.cache.keys()).filter(k => k.match(pattern));
-                return keys;
-            }),
-            keys => new Lazy(() => {
-                keys.forEach(k => this.cache.delete(k));
-                return keys;
-            }),
-            invalidated => new Lazy(() => {
-                lazyEvents.emit({ type: 'CACHE_INVALIDATED', count: invalidated.length });
-                return invalidated;
-            })
-        );
+        this.graph = initPullGraph();
     }
 
     get(key) {
-        if (!this.cache.has(key)) {
-            // Pull computation only when needed
-            const lazy = new Lazy(() => this.generator(key));
-            this.cache.set(key, lazy);
+        const nodeKey = `pullcache:${key}`;
+        if (!this.graph.nodes.has(nodeKey)) {
+            this.graph.register(nodeKey, new Lazy(() => this.generator(key)));
         }
-        return this.cache.get(key).value;
+        return this.graph.pull(nodeKey);
     }
 
     has(key) {
-        if (!this.cache.has(key)) return false;
-        const lazy = this.cache.get(key);
-        return lazy.isEvaluated();
+        const nodeKey = `pullcache:${key}`;
+        const node = this.graph.nodes.get(nodeKey);
+        return node && node.evaluated;
+    }
+
+    warm(keys) {
+        traceOrchestrator.trace('CACHE_WARM_START', { count: keys.length });
+        const results = keys.map(key => this.get(key));
+        traceOrchestrator.trace('CACHE_WARM_COMPLETE', { count: keys.length });
+        return { keys, results };
+    }
+
+    invalidate(pattern) {
+        const keys = Array.from(this.graph.nodes.keys())
+            .filter(k => k.startsWith('pullcache:') && k.match(pattern))
+            .map(k => k.replace('pullcache:', ''));
+        keys.forEach(k => this.graph.invalidate(`pullcache:${k}`));
+        lazyEvents.emit({ type: 'CACHE_INVALIDATED', count: keys.length });
+        return keys;
     }
 }
-
-// Helper to auto-pull from Lazy values - foundational for everything
-const pull = (value) => {
-    if (value instanceof Lazy) return value.value;
-    if (value instanceof LazyStream) return value;
-    if (value && typeof value === 'object' && value._thunk) return value.value;
-    return value;
-};
 
 let pullGraph = null;
 const initPullGraph = () => {
@@ -811,23 +785,8 @@ class LazyFS {
         
         // Directory listing cache
         this.dirCache = new PullCache((path) => fs.readdirSync(path));
-        
-        // Lazy pull helper - avoids early unwrapping
-        this.pull = async (lazyValue) => {
-            if (lazyValue instanceof PullPromise) {
-                return await lazyValue.pull();
-            }
-            if (lazyValue instanceof Lazy) {
-                const result = lazyValue.value;
-                if (result instanceof PullPromise) {
-                    return await result.pull();
-                }
-                return result;
-            }
-            return lazyValue;
-        };
     }
-    
+
     // Read file lazily - integrates with our parse() pipeline
     read(path) {
         return new Lazy(() => {
@@ -1493,7 +1452,7 @@ class LazyGit {
                 const results = [];
                 for (const file of files) {
                     // Use lazy file existence check
-                    const exists = await lazyFS.pull(lazyFS.exists(file));
+                    const exists = lazyFS.exists(file).value;
                     if (exists) {
                         const result = execSync(`${CONFIG.strings.addCommand} ${file}`, {
                             encoding: CONFIG.strings.standardEncoding
@@ -3220,6 +3179,10 @@ Object.assign(CONFIG_RAW, {
 // LAWS: Universal laws that govern all computation
 // Provide direct access
 const CONFIG = CONFIG_RAW;
+
+// Path resolution helpers - single source of truth for all path construction
+CONFIG.resolvePath = (relativePath) => path.join(PROJECT_ROOT, relativePath);
+CONFIG.resolveDocPath = (doc, format) => CONFIG.resolvePath(doc[format]);
 
 // CONFIG STRUCTURE
 
@@ -6226,7 +6189,7 @@ class DocumentProcessor {
         this.sections = new Map();
         this.relationships = new Map();
         this.data = new Map();
-        this.cache = new Map(); // Cache for processed results
+        this.graph = initPullGraph();
         
         // SELF-REGISTRATION
         this.dependencies = ['LaTeXProcessor', 'ProcessingCoordinator'];
@@ -6289,10 +6252,9 @@ class DocumentProcessor {
             this.sections.clear();
             this.relationships.clear();
             this.data.clear();
-            this.cache.clear();
-            
+
             this.parseEager(text);
-            
+
             return { sections: this.sections, relationships: this.relationships };
         });
     }
@@ -6373,7 +6335,6 @@ class DocumentProcessor {
         this.sections.clear();
         this.relationships.clear();
         this.data.clear();
-        this.cache.clear();
 
         text = this.preprocessMathBlocks(text);
 
@@ -6610,24 +6571,21 @@ class DocumentProcessor {
                 const promise = (async () => {
                     try {
                         const cacheKey = `transform:${format}:${this.getCacheKey()}`;
-                        
-                        // Check cache first
-                        if (this.cache.has(cacheKey)) {
-                            results[format] = this.cache.get(cacheKey);
-                            return;
+
+                        // Register transformation in graph if not present
+                        if (!this.graph.nodes.has(cacheKey)) {
+                            this.graph.register(cacheKey, new Lazy(() => {
+                                if (format === 'pdf') {
+                                    return this.modalities[format].generateHTML(this);
+                                } else if (format === 'html') {
+                                    return this.modalities[format].generateHTML(this);
+                                } else if (format === 'markdown') {
+                                    return this.modalities[format].render(this);
+                                }
+                            }));
                         }
-                        
-                        // Perform transformation
-                        if (format === 'pdf') {
-                            results[format] = this.modalities[format].generateHTML(this);
-                        } else if (format === 'html') {
-                            results[format] = this.modalities[format].generateHTML(this);
-                        } else if (format === 'markdown') {
-                            results[format] = this.modalities[format].render(this);
-                        }
-                        
-                        // Cache result
-                        this.cache.set(cacheKey, results[format]);
+
+                        results[format] = this.graph.pull(cacheKey);
                     } catch (error) {
                         console.error(`Error generating ${format}:`, error);
                         results[format] = null; // Mark as failed but continue with other formats
@@ -8518,10 +8476,10 @@ function renderDocumentIndex(config, documents) {
     };
     
     const docInfo = documents.map(doc => {
-        const txtPath = path.join(PROJECT_ROOT, doc.txt);
+        const txtPath = CONFIG.resolveDocPath(doc, 'txt');
         const content = fs.readFileSync(txtPath, CONFIG.strings.standardEncodingDash);
         const description = extractDescription(content);
-        
+
         // Get file sizes
         const getSizeOrZero = (filepath) => {
             try {
@@ -8530,10 +8488,10 @@ function renderDocumentIndex(config, documents) {
                 return 0;
             }
         };
-        
-        const htmlSize = getSizeOrZero(path.join(PROJECT_ROOT, doc.html));
-        const pdfSize = getSizeOrZero(path.join(PROJECT_ROOT, doc.pdf));
-        const mdSize = getSizeOrZero(path.join(PROJECT_ROOT, doc.md));
+
+        const htmlSize = getSizeOrZero(CONFIG.resolveDocPath(doc, 'html'));
+        const pdfSize = getSizeOrZero(CONFIG.resolveDocPath(doc, 'pdf'));
+        const mdSize = getSizeOrZero(CONFIG.resolveDocPath(doc, 'md'));
         
         // Count sections
         const sectionCount = content.match(CONFIG.patterns.sectionCount)?.length;
@@ -8731,18 +8689,22 @@ async function buildFile(docConfig) {
     console.log('[BUILD] Starting build for:', docConfig.txt);
 
     // Read file content
-    const fileContent = await lazyFS.pull(lazyFS.read(path.join(PROJECT_ROOT, docConfig.txt)));
+    const fileContent = lazyFS.read(CONFIG.resolveDocPath(docConfig, 'txt')).value;
 
     // Get current git commit for hermetic builds
     const gitCommit = await lazyGit.getCurrentCommit().pull().catch(() => 'unknown');
 
     // Build dependencies (builder script hash)
-    const builderHash = await lazyFS.pull(
-        lazyFS.read(path.join(PROJECT_ROOT, 'scripts/builder.js'))
-    ).then(content => {
-        const hash = crypto.createHash('sha256').update(content).digest('hex').substring(0, THRESHOLDS.HASH_SHORT_LENGTH);
-        return { name: 'builder', hash };
-    }).catch(() => ({ name: 'builder', hash: 'unknown' }));
+    const builderContent = lazyFS.read(path.join(PROJECT_ROOT, 'scripts/builder.js')).value;
+    const builderHash = (() => {
+        try {
+            const content = builderContent;
+            const hash = crypto.createHash('sha256').update(content).digest('hex').substring(0, THRESHOLDS.HASH_SHORT_LENGTH);
+            return { name: 'builder', hash };
+        } catch {
+            return { name: 'builder', hash: 'unknown' };
+        }
+    })();
 
     // Build context for proper sponge absorption
     const buildContext = {
@@ -8775,15 +8737,15 @@ async function buildFile(docConfig) {
     
     // Pipeline stages
     const validateFileExists = docConfig => new PullPromise(async () => {
-        const txtPath = path.join(PROJECT_ROOT, docConfig.txt);
-        const exists = await lazyFS.pull(lazyFS.exists(txtPath));
+        const txtPath = CONFIG.resolveDocPath(docConfig, 'txt');
+        const exists = lazyFS.exists(txtPath).value;
         if (!exists) throw new Error(`File not found: ${txtPath}`);
         return { txtPath, docConfig };
     });
 
     const readFileContent = stageResult => new PullPromise(async () => {
         const data = stageResult instanceof PullPromise ? await stageResult.pull() : stageResult;
-        const content = await lazyFS.pull(lazyFS.read(data.txtPath));
+        const content = lazyFS.read(data.txtPath).value;
         return { content, docConfig: data.docConfig };
     });
 
@@ -8925,7 +8887,7 @@ async function buildFile(docConfig) {
         if (data.formats.html) {
             try {
                 const htmlPath = path.join(PROJECT_ROOT, data.docConfig.html);
-                await lazyFS.pull(lazyFS.write(htmlPath, data.formats.html));
+                await lazyFS.write(htmlPath, data.formats.html).pull();
                 writeResults.success.push('html');
             } catch (htmlWriteError) {
                 writeResults.failed.push({ format: 'html', error: htmlWriteError.message });
@@ -8937,7 +8899,7 @@ async function buildFile(docConfig) {
         if (data.formats.md) {
             try {
                 const mdPath = path.join(PROJECT_ROOT, data.docConfig.md);
-                await lazyFS.pull(lazyFS.write(mdPath, data.formats.md));
+                await lazyFS.write(mdPath, data.formats.md).pull();
                 writeResults.success.push('md');
             } catch (mdWriteError) {
                 writeResults.failed.push({ format: 'md', error: mdWriteError.message });
@@ -8958,7 +8920,7 @@ async function buildFile(docConfig) {
                 // Try to write PDF HTML as fallback
                 try {
                     const fallbackPath = path.join(PROJECT_ROOT, `${path.basename(data.docConfig.pdf, '.pdf')}_pdf.html`);
-                    await lazyFS.pull(lazyFS.write(fallbackPath, data.formats.pdf));
+                    await lazyFS.write(fallbackPath, data.formats.pdf).pull();
                     writeResults.success.push('pdf_fallback_html');
                 } catch (fallbackError) {
                     // Ignore fallback error
@@ -9342,9 +9304,9 @@ async function watch() {
         // Wait for all expected artifacts
         const artifacts = [];
         for (const file of FILES) {
-            artifacts.push(waitForArtifact(path.join(__dirname, file.html)));
-            artifacts.push(waitForArtifact(path.join(__dirname, file.pdf)));
-            artifacts.push(waitForArtifact(path.join(__dirname, file.md)));
+            artifacts.push(waitForArtifact(CONFIG.resolveDocPath(file, 'html')));
+            artifacts.push(waitForArtifact(CONFIG.resolveDocPath(file, 'pdf')));
+            artifacts.push(waitForArtifact(CONFIG.resolveDocPath(file, 'md')));
         }
         await Promise.all(artifacts);
     });
@@ -9372,7 +9334,7 @@ async function watch() {
     // Configure file watchers
     // Use watchFile on Windows
     for (const file of FILES) {
-        const txtPath = path.join(__dirname, file.txt);
+        const txtPath = CONFIG.resolveDocPath(file, 'txt');
         if (lazyFS.exists(txtPath).value) {
             // Use both fs.watch and fs.watchFile for maximum reliability
             // fs.watch for instant detection when it works
@@ -9432,17 +9394,12 @@ async function watch() {
                         traceOrchestrator.initializeLazyTelemetry();
                     }
                     
-                    // Create a lazy pipeline for telemetry export
-                    const telemetryPipeline = new Lazy(() => {
-                        const exportLazy = traceOrchestrator.lazyTelemetry.value.export;
-                        return lazyFS.write(
-                            path.join(__dirname, CONFIG.files.telemetryFile),
-                            exportLazy.value.json.value
-                        );
-                    });
-                    
-                    // Only force evaluation when we actually need to write
-                    await telemetryPipeline.value.value;
+                    // Export telemetry to file
+                    const exportLazy = traceOrchestrator.lazyTelemetry.value.export;
+                    await lazyFS.write(
+                        path.join(__dirname, CONFIG.files.telemetryFile),
+                        exportLazy.value.json.value
+                    ).pull();
                 } catch (error) {
                     // Don't let telemetry errors crash the build system
                     traceOrchestrator.error(error, { context: 'telemetry_export' });
