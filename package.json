@@ -1,0 +1,13 @@
+{
+  "name": "hct",
+  "version": "5.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/builder.js",
+    "build": "node scripts/builder.js",
+    "watch": "node scripts/builder.js"
+  },
+  "dependencies": {
+    "puppeteer": "*"
+  }
+}
