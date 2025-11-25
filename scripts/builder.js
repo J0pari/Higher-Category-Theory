@@ -8617,11 +8617,29 @@ class QueryServer {
                     try {
                         const query = JSON.parse(line);
 
+                        if (typeof query.timestamp !== 'number') {
+                            socket.write(JSON.stringify({ status: 400, error: 'Missing timestamp' }) + '\n');
+                            continue;
+                        }
+
+                        const now = Date.now();
+                        const age = now - query.timestamp;
+
+                        if (age > 30000) {
+                            socket.write(JSON.stringify({ status: 401, error: 'Timestamp too old' }) + '\n');
+                            continue;
+                        }
+
+                        if (age < -5000) {
+                            socket.write(JSON.stringify({ status: 401, error: 'Timestamp in future' }) + '\n');
+                            continue;
+                        }
+
                         const bodyStr = query.body ? JSON.stringify(query.body) : '';
                         const canonical = query.method + query.path + query.timestamp + bodyStr;
                         const expectedSig = crypto.createHmac('sha256', HMAC_KEY).update(canonical).digest('hex');
 
-                        if (query.signature !== expectedSig) {
+                        if (!crypto.timingSafeEqual(Buffer.from(query.signature, 'hex'), Buffer.from(expectedSig, 'hex'))) {
                             socket.write(JSON.stringify({ status: 403, error: 'Invalid signature' }) + '\n');
                             continue;
                         }
@@ -8942,6 +8960,17 @@ class QueryServer {
                         };
                     }
                 )
+            },
+            telemetry: {
+                export: () => traceOrchestrator.exportTelemetry(),
+                metrics: () => {
+                    const exported = traceOrchestrator.exportTelemetry();
+                    return exported.metrics;
+                },
+                snapshot: () => {
+                    const exported = traceOrchestrator.exportTelemetry();
+                    return exported.raw;
+                }
             },
             health: () => ({
                 status: 'ok',
