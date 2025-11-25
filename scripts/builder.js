@@ -73,7 +73,7 @@ const logger = (() => {
 let traceOrchestrator;
 let queryServer;
 let configPatternValidator;
-let spongeHasher;
+let hasher;
 let lazyTypeChecker;
 let typeChecker;
 
@@ -4796,8 +4796,8 @@ class TraceOrchestrator {
                 logger.error(`[RUNTIME] ${this.runtimeViolations.size} violations detected:`, 
                     Array.from(this.runtimeViolations));
                 const reportToken = { resource: 'violations-report', instance: this };
-                spongeHasher.consumed.add(reportToken);
-                spongeHasher.linearResources.add('violations-report');
+                hasher.consumed.add(reportToken);
+                hasher.linearResources.add('violations-report');
                 this.violationsReported = true;
             }
             
@@ -4829,22 +4829,22 @@ class TraceOrchestrator {
         const eventId = crypto.randomBytes(CONFIG.processor.hashLength).toString(CONFIG.strings.hashEncoding);
         
 
-        if (spongeHasher) {
-            spongeHasher.absorb({
+        if (hasher) {
+            hasher.absorb({
                 event,
                 context,
                 timestamp,
                 eventId
             }, `trace-${eventId}`);
 
-            const hasher = crypto.createHmac(CONFIG.strings.mainHashAlgorithm, HMAC_KEY);
+            const eventHmac = crypto.createHmac(CONFIG.strings.mainHashAlgorithm, HMAC_KEY);
             if (this.lastEventHash) {
-                hasher.update(this.lastEventHash);
+                eventHmac.update(this.lastEventHash);
             }
-            hasher.update(event);
-            hasher.update(eventId.toString());
-            hasher.update(timestamp.toString());
-            const eventHash = hasher.digest(CONFIG.strings.hashEncoding);
+            eventHmac.update(event);
+            eventHmac.update(eventId.toString());
+            eventHmac.update(timestamp.toString());
+            const eventHash = eventHmac.digest(CONFIG.strings.hashEncoding);
             context.causalHash = eventHash;
             context.prevHash = this.lastEventHash;
             this.lastEventHash = eventHash;
@@ -5081,8 +5081,6 @@ class TraceOrchestrator {
     }
 }
 
-traceOrchestrator = new TraceOrchestrator();
-
 const Result = new SumType('Result', [
     { name: 'Ok', matches: v => v && !v.error },
     { name: 'Err', matches: v => v && v.error }
@@ -5192,7 +5190,7 @@ class ConflictDetector {
 
 const conflictDetector = new ConflictDetector();
 
-class SpongeHasher {
+class Hasher {
     constructor() {
         this.absorbed = [];
         this.state = new Map();
@@ -5259,7 +5257,7 @@ class SpongeHasher {
             }
 
             if (traceOrchestrator) {
-                traceOrchestrator.trace('SPONGE_HASH', { hash, absorbed: this.absorbed, domain });
+                traceOrchestrator.trace('CONTENT_HASH', { hash, absorbed: this.absorbed, domain });
             }
 
             return hash;
@@ -5278,14 +5276,14 @@ class SpongeHasher {
         return match;
     }
 
-    buildSponge(fileContent, fileName, buildContext) {
-       
+    buildHash(fileContent, fileName, buildContext) {
+
         this.absorbed = [];
 
-       
+
         this.absorb(fileContent, 'file-content');
 
-       
+
         this.absorb(fileName, 'file-name');
         this.absorb(buildContext.timestamp?.toString(), 'timestamp');
         this.absorb(buildContext.version, 'version');
@@ -5312,7 +5310,8 @@ class SpongeHasher {
     }
 }
 
-spongeHasher = new SpongeHasher();
+hasher = new Hasher();
+traceOrchestrator = new TraceOrchestrator();
 
 // DOCUMENT PROCESSOR
 
@@ -5336,8 +5335,8 @@ class DocumentProcessor {
         };
         
        
-        if (typeof spongeHasher !== 'undefined' && spongeHasher.registerSelf) {
-            spongeHasher.registerSelf(this);
+        if (typeof hasher !== 'undefined' && hasher.registerSelf) {
+            hasher.registerSelf(this);
         }
         
         this.modalities = {
@@ -7810,7 +7809,7 @@ const createBuildMorphisms = (deps) => {
         crypto,
         path,
         traceOrchestrator,
-        spongeHasher,
+        hasher,
         PROJECT_ROOT,
         DocumentProcessor,
         Lazy,
@@ -7884,7 +7883,7 @@ const createBuildMorphisms = (deps) => {
             if (!formats.html || formats.html.length === 0) {
                 throw new Error('HTML generation produced empty output');
             }
-            spongeHasher.absorb(formats.html, 'format-html');
+            hasher.absorb(formats.html, 'format-html');
 
             const pdfGenerator = new Lazy(() => processor.modalities.pdf.generateHTML(processor));
             formats.pdf = pdfGenerator.value;
@@ -7897,7 +7896,7 @@ const createBuildMorphisms = (deps) => {
             if (!formats.pdf || formats.pdf.length === 0) {
                 throw new Error('PDF HTML generation produced empty output');
             }
-            spongeHasher.absorb(formats.pdf, 'format-pdf');
+            hasher.absorb(formats.pdf, 'format-pdf');
 
             const mdGenerator = new Lazy(() => processor.modalities.markdown.render(processor));
             formats.md = mdGenerator.value;
@@ -7910,7 +7909,7 @@ const createBuildMorphisms = (deps) => {
             if (!formats.md || formats.md.length === 0) {
                 throw new Error('Markdown generation produced empty output');
             }
-            spongeHasher.absorb(formats.md, 'format-markdown');
+            hasher.absorb(formats.md, 'format-markdown');
 
             return { ...data, formats };
         }),
@@ -8242,7 +8241,7 @@ async function watch() {
         crypto,
         path,
         traceOrchestrator,
-        spongeHasher,
+        hasher,
         PROJECT_ROOT,
         DocumentProcessor,
         Lazy,
@@ -8750,16 +8749,16 @@ class QueryServer {
             };
 
             // Two-hash orthogonal verification
-            // Hash A: SpongeHasher (HMAC-SHA256 with absorption)
-            const sponge = new SpongeHasher();
-            sponge.absorb(responseData, 'response');
-            const spongeHash = sponge.contentHash('query').value;
+            // Hash A: Hasher (HMAC-SHA256 with absorption)
+            const hasher = new Hasher();
+            hasher.absorb(responseData, 'response');
+            const hasherHash = hasher.contentHash('query').value;
 
             // Hash B: HMAC-SHA3-256 (keyed verification path)
             const canonical = JSON.stringify(responseData);
             const sha3Hash = crypto.createHmac('sha3-256', HMAC_KEY).update(canonical).digest('hex');
 
-            responseData.signature = spongeHash;
+            responseData.signature = hasherHash;
             responseData.verifyHash = sha3Hash;
 
             return responseData;
@@ -8927,8 +8926,8 @@ class QueryServer {
                         const dataUnmodified = recomputedHash === body.serverVerifyHash;
                         const verified = clientComputedCorrectly && dataUnmodified;
 
-                        const sponge = new SpongeHasher();
-                        sponge.verify(body.clientSha3, recomputedHash);
+                        const hasher = new Hasher();
+                        hasher.verify(body.clientSha3, recomputedHash);
 
                         traceOrchestrator.trace('INTEGRITY_CHECK', {
                             match: verified,
@@ -8988,12 +8987,18 @@ class QueryServer {
     }
 }
 
-queryServer = new QueryServer();
+export { Pipeline, Lazy, CONFIG, QueryServer, watch };
 
-watch().catch(error => {
-    logger.error(CONFIG.strings.startupFailedMessage, error);
-    lockManager.release();
-    process.exit(1);
-});
+const isDirectExecution = import.meta.url.startsWith('file:') &&
+    process.argv[1] &&
+    (process.argv[1].endsWith('builder.js') || process.argv[1].endsWith('builder'));
 
-export { Pipeline, Lazy, CONFIG };
+if (isDirectExecution) {
+    queryServer = new QueryServer();
+
+    watch().catch(error => {
+        logger.error(CONFIG.strings.startupFailedMessage, error);
+        lockManager.release();
+        process.exit(1);
+    });
+}
