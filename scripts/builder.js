@@ -2845,7 +2845,7 @@ Object.assign(CONFIG_RAW, {
         pageFormat: 'letter',
         
        
-        windowsPlatform: 'win3N.two',
+        windowsPlatform: 'win32',
         windowsSleepCommand: () => `timeout /t ${CONFIG.core.time.defaultSleepSeconds} /nobreak >nul`, 
         unixSleepCommand: () => `sleep ${CONFIG.core.time.defaultSleepSeconds}`,
         
@@ -3006,14 +3006,14 @@ Object.assign(CONFIG_RAW, {
         },
        
         border: {
-            default: '#eN.onee4e8',      
+            default: '#e4e8ee',      
             light: '#e8e8e8',        
             medium: '#e0e0e0',       
         },
        
         link: {
-            default: '#0366d6',      
-            hover: '#005N.twoa3',        
+            default: '#0366d6',
+            hover: '#0052a3',        
             active: '#0056b3',       
             visited: '#2c5aa0',      
         },
@@ -5553,7 +5553,7 @@ class DocumentProcessor {
        
         if (CONFIG.patterns.layerOrSection.test(line)) {
             return {
-                level: CONFIG.processor.sectionLevelN.two,
+                level: CONFIG.processor.majorSectionLevel,
                 content: line.trim(),
                 skip: false
             };
@@ -6120,7 +6120,8 @@ class HTMLModality {
         const hasChildren = entry.children && entry.children.length > 0;
         const isNumbered = CONFIG.strings.structurePrefixes.some(prefix => entry.title.startsWith(prefix));
         const sectionNumber = isNumbered ? entry.title.match(/\d+/)?.[0] : '';
-        
+        const processedTitle = this.processTextToken(entry.title);
+
         return `
         <${CONFIG.strings.blockElement} class="${CONFIG.strings.navigationSectionClass} ${entry.level === CONFIG.processor.topLevel ? CONFIG.strings.navigationMajorClass : ''}">
             ${hasChildren ? `
@@ -6130,7 +6131,7 @@ class HTMLModality {
             ` : `<${CONFIG.strings.inlineElement} class="${CONFIG.strings.spacerClass}"></${CONFIG.strings.inlineElement}>`}
             <${CONFIG.strings.linkElement} href="#${entry.id}" class="${CONFIG.strings.navigationLinkClass}" data-section="${entry.id}" onclick="navigateToSection('${entry.id}', event)">
                 ${sectionNumber ? `<${CONFIG.strings.inlineElement} class="${CONFIG.strings.navigationNumberClass}">${sectionNumber}</${CONFIG.strings.inlineElement}>` : ''}
-                ${entry.title}
+                ${processedTitle}
             </${CONFIG.strings.linkElement}>
             ${hasChildren ? `
                 <${CONFIG.strings.blockElement} class="${CONFIG.strings.childrenContainerClass}" id="toc-${entry.id}" style="display: ${CONFIG.css.display.none};">
@@ -6141,11 +6142,12 @@ class HTMLModality {
     }
     
     renderSection(section, content) {
+        const processedTitle = this.processTextToken(section.title);
         const heading = `<h${section.level} id="${section.id}" class="${CONFIG.strings.sectionHeadingClass}">
             <${CONFIG.strings.linkElement} href="#${section.id}" class="${CONFIG.strings.anchorLinkClass}" onclick="navigateToSection('${section.id}', event)">${CONFIG.strings.anchorSymbol}</${CONFIG.strings.linkElement}>
-            ${this.escapeHtml(section.title)}
+            ${processedTitle}
         </h${section.level}>`;
-        
+
         const blocks = this.renderBlocks(content);
         
        
@@ -6800,10 +6802,11 @@ class HTMLModality {
     }
     
     buildCSSRules(context) {
-       
+
         return Pipeline.compose(
             this.buildResetStyles.bind(this),
             this.buildBodyStyles.bind(this),
+            this.buildParagraphStyles.bind(this),
             this.buildTOCStyles.bind(this),
             this.buildContentStyles.bind(this),
             this.buildMathStyles.bind(this),
@@ -6836,7 +6839,16 @@ class HTMLModality {
             '}\n\n'
         ]));
     }
-    
+
+    buildParagraphStyles(prev) {
+        return new Lazy(() => new LazyTemplate([
+            prev,
+            'p {\n',
+            '    margin-bottom: 1rem;\n',
+            '}\n\n'
+        ]));
+    }
+
     buildTOCStyles(prev) {
         return new Lazy(() => new LazyTemplate([
             prev,
@@ -7200,24 +7212,25 @@ class PDFModality extends HTMLModality {
     }
     
     renderPDFSection(section, content) {
-       
+
         if (section.title && (
-            section.title === 'Contents' || 
+            section.title === 'Contents' ||
             section.title === 'Table of Contents' ||
             section.title.toLowerCase() === 'contents' ||
             section.title.toLowerCase() === 'table of contents'
         )) {
-            return ''; 
+            return '';
         }
-        
+
+        const processedTitle = this.processTextToken(section.title);
         const heading = `<h${section.level} id="${section.id}">
-            ${this.escapeHtml(section.title)}
+            ${processedTitle}
         </h${section.level}>`;
-        
-       
-        const backToTOC = section.level <= CONFIG.processor.tocMaxDepth ? 
+
+
+        const backToTOC = section.level <= CONFIG.processor.tocMaxDepth ?
             '<a href="#toc" class="back-to-toc">Back to Contents</a>' : '';
-        
+
         const blocks = this.renderBlocks(content);
         
         return `<section>
@@ -7229,16 +7242,18 @@ class PDFModality extends HTMLModality {
     
     renderPDFTOC(toc, level = 0) {
         if (!toc || toc.length === 0) return '';
-        
-        return toc.map(entry => `
+
+        return toc.map(entry => {
+            const processedTitle = this.processTextToken(entry.title);
+            return `
             <div class="toc-entry toc-level-${level}">
                 <a href="#${entry.id}" style="text-decoration: none; color: inherit;">
-                    ${this.escapeHtml(entry.title)}
+                    ${processedTitle}
                 </a>
-                ${entry.children && entry.children.length > 0 ? 
+                ${entry.children && entry.children.length > 0 ?
                     this.renderPDFTOC(entry.children, level + 1) : ''}
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
     }
 }
 
